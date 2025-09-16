@@ -1,0 +1,5 @@
+schedule>=1.2.0
+spotipy>=2.22.1
+psycopg2-binary>=2.9.7
+sqlalchemy>=2.0.0
+redis>=4.6.0

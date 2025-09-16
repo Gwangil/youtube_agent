@@ -1,0 +1,127 @@
+services:
+  # Database Services
+  postgres:
+    image: postgres:15-alpine
+    container_name: podcast_postgres
+    environment:
+      POSTGRES_DB: podcast_agent
+      POSTGRES_USER: podcast_user
+      POSTGRES_PASSWORD: podcast_pass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: podcast_redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  # Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: podcast_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    restart: unless-stopped
+
+  # Data Collection Service
+  data-collector:
+    build:
+      context: .
+      dockerfile: services/data-collector/Dockerfile
+    container_name: youtube_data_collector
+    environment:
+      - DATABASE_URL=postgresql://podcast_user:podcast_pass@postgres:5432/podcast_agent
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  # Data Processing Service
+  data-processor:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_data_processor
+    environment:
+      - DATABASE_URL=postgresql://podcast_user:podcast_pass@postgres:5432/podcast_agent
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Agent Service
+  agent-service:
+    build:
+      context: .
+      dockerfile: services/agent-service/Dockerfile
+    container_name: youtube_agent_service
+    environment:
+      - DATABASE_URL=postgresql://podcast_user:podcast_pass@postgres:5432/podcast_agent
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+      - qdrant
+    restart: unless-stopped
+
+  # UI Service (OpenWebUI)
+  ui-service:
+    build:
+      context: .
+      dockerfile: services/ui-service/Dockerfile
+    container_name: youtube_ui
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OPENAI_API_BASE_URL=http://agent-service:8000/v1
+      - OPENAI_API_KEY=dummy-key
+    ports:
+      - "3000:8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    depends_on:
+      - agent-service
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  openwebui_data:
+    driver: local
+
+networks:
+  default:
+    name: podcast_network
