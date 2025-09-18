@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}오류 - YouTube Agent{% endblock %}
+{% block header %}❌ 오류 발생{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card border-danger">
+            <div class="card-header bg-danger text-white">
+                <h5 class="mb-0"><i class="fas fa-exclamation-triangle"></i> 시스템 오류</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-danger" role="alert">
+                    <h6 class="alert-heading">다음 오류가 발생했습니다:</h6>
+                    <p class="mb-0">{{ error }}</p>
+                </div>
+
+                <h6>해결 방법:</h6>
+                <ul>
+                    <li>서비스가 정상적으로 실행 중인지 확인하세요</li>
+                    <li>네트워크 연결을 확인하세요</li>
+                    <li>잠시 후 다시 시도해보세요</li>
+                    <li>문제가 계속되면 시스템 관리자에게 문의하세요</li>
+                </ul>
+
+                <div class="mt-4">
+                    <a href="/" class="btn btn-primary">
+                        <i class="fas fa-home"></i> 메인 대시보드로
+                    </a>
+                    <button class="btn btn-secondary" onclick="history.back()">
+                        <i class="fas fa-arrow-left"></i> 뒤로 가기
+                    </button>
+                    <button class="btn btn-info" onclick="window.location.reload()">
+                        <i class="fas fa-sync"></i> 새로고침
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

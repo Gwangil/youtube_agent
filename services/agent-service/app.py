@@ -85,6 +85,23 @@ class ChannelInfo(BaseModel):
     is_active: bool
 
 
+class ChannelCreateRequest(BaseModel):
+    name: str = Field(..., description="채널 이름")
+    url: str = Field(..., description="채널 URL")
+    platform: str = Field(default="youtube", description="플랫폼 (현재 youtube만 지원)")
+    category: Optional[str] = Field(None, description="카테고리")
+    description: Optional[str] = Field(None, description="설명")
+    language: str = Field(default="ko", description="언어")
+
+
+class ChannelUpdateRequest(BaseModel):
+    name: Optional[str] = Field(None, description="채널 이름")
+    category: Optional[str] = Field(None, description="카테고리")
+    description: Optional[str] = Field(None, description="설명")
+    language: Optional[str] = Field(None, description="언어")
+    is_active: Optional[bool] = Field(None, description="활성 상태")
+
+
 # FastAPI 앱 생성
 app = FastAPI(
     title="YouTube RAG Agent API",
@@ -372,6 +389,136 @@ async def get_stats(db = Depends(get_db)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"통계 조회 실패: {str(e)}")
+
+
+@app.post("/api/channels", response_model=ChannelInfo)
+async def create_channel(
+    request: ChannelCreateRequest,
+    db = Depends(get_db)
+):
+    """새 채널 추가"""
+    try:
+        # URL 중복 확인
+        existing_channel = db.query(Channel).filter(Channel.url == request.url).first()
+        if existing_channel:
+            raise HTTPException(status_code=400, detail="이미 등록된 채널 URL입니다")
+
+        # 새 채널 생성
+        new_channel = Channel(
+            name=request.name,
+            url=request.url,
+            platform=request.platform,
+            category=request.category,
+            description=request.description,
+            language=request.language,
+            is_active=True
+        )
+
+        db.add(new_channel)
+        db.commit()
+        db.refresh(new_channel)
+
+        return ChannelInfo(
+            id=new_channel.id,
+            name=new_channel.name,
+            url=new_channel.url,
+            platform=new_channel.platform,
+            category=new_channel.category,
+            description=new_channel.description,
+            language=new_channel.language,
+            is_active=new_channel.is_active
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"채널 추가 실패: {str(e)}")
+
+
+@app.put("/api/channels/{channel_id}", response_model=ChannelInfo)
+async def update_channel(
+    channel_id: int,
+    request: ChannelUpdateRequest,
+    db = Depends(get_db)
+):
+    """채널 정보 수정"""
+    try:
+        channel = db.query(Channel).filter(Channel.id == channel_id).first()
+        if not channel:
+            raise HTTPException(status_code=404, detail="채널을 찾을 수 없습니다")
+
+        # 제공된 필드만 업데이트
+        update_data = request.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(channel, field, value)
+
+        db.commit()
+        db.refresh(channel)
+
+        return ChannelInfo(
+            id=channel.id,
+            name=channel.name,
+            url=channel.url,
+            platform=channel.platform,
+            category=channel.category,
+            description=channel.description,
+            language=channel.language,
+            is_active=channel.is_active
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"채널 수정 실패: {str(e)}")
+
+
+@app.delete("/api/channels/{channel_id}")
+async def delete_channel(
+    channel_id: int,
+    db = Depends(get_db)
+):
+    """채널 삭제 (소프트 삭제 - 비활성화)"""
+    try:
+        channel = db.query(Channel).filter(Channel.id == channel_id).first()
+        if not channel:
+            raise HTTPException(status_code=404, detail="채널을 찾을 수 없습니다")
+
+        # 소프트 삭제 (비활성화)
+        channel.is_active = False
+        db.commit()
+
+        return {"message": f"채널 '{channel.name}'이 비활성화되었습니다", "channel_id": channel_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"채널 삭제 실패: {str(e)}")
+
+
+@app.post("/api/channels/{channel_id}/activate")
+async def activate_channel(
+    channel_id: int,
+    db = Depends(get_db)
+):
+    """채널 활성화"""
+    try:
+        channel = db.query(Channel).filter(Channel.id == channel_id).first()
+        if not channel:
+            raise HTTPException(status_code=404, detail="채널을 찾을 수 없습니다")
+
+        channel.is_active = True
+        db.commit()
+
+        return {"message": f"채널 '{channel.name}'이 활성화되었습니다", "channel_id": channel_id}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"채널 활성화 실패: {str(e)}")
 
 
 if __name__ == "__main__":

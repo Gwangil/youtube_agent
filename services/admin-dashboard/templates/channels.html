@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+
+{% block title %}채널 관리 - YouTube Agent{% endblock %}
+{% block header %}📺 채널 관리{% endblock %}
+
+{% block content %}
+<!-- 채널 추가 폼 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-plus"></i> 새 채널 추가</h5>
+            </div>
+            <div class="card-body">
+                <form method="post" action="/channels/add">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="name" class="form-label">채널 이름 *</label>
+                                <input type="text" class="form-control" id="name" name="name" required
+                                       placeholder="예: 슈카월드">
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="url" class="form-label">YouTube 채널 URL *</label>
+                                <input type="url" class="form-control" id="url" name="url" required
+                                       placeholder="예: https://www.youtube.com/@syukaworld">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="category" class="form-label">카테고리</label>
+                                <select class="form-select" id="category" name="category">
+                                    <option value="">선택하세요</option>
+                                    <option value="비즈니스">비즈니스</option>
+                                    <option value="교육">교육</option>
+                                    <option value="엔터테인먼트">엔터테인먼트</option>
+                                    <option value="기술">기술</option>
+                                    <option value="라이프스타일">라이프스타일</option>
+                                    <option value="뉴스">뉴스</option>
+                                    <option value="기타">기타</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label for="description" class="form-label">설명</label>
+                                <textarea class="form-control" id="description" name="description" rows="3"
+                                          placeholder="채널에 대한 간단한 설명"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> 채널 추가
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 채널 목록 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="fas fa-list"></i> 등록된 채널</h5>
+                <span class="badge bg-primary">총 {{ channels|length }}개</span>
+            </div>
+            <div class="card-body">
+                {% if channels %}
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>채널명</th>
+                                    <th>URL</th>
+                                    <th>카테고리</th>
+                                    <th>언어</th>
+                                    <th>상태</th>
+                                    <th>등록일</th>
+                                    <th>액션</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for channel in channels %}
+                                <tr>
+                                    <td>
+                                        <strong>{{ channel.name }}</strong>
+                                        {% if channel.description %}
+                                            <br><small class="text-muted">{{ channel.description[:50] }}{% if channel.description|length > 50 %}...{% endif %}</small>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <a href="{{ channel.url }}" target="_blank" class="text-decoration-none">
+                                            <i class="fab fa-youtube text-danger"></i>
+                                            {{ channel.url|truncate(30) }}
+                                        </a>
+                                    </td>
+                                    <td>
+                                        {% if channel.category %}
+                                            <span class="badge bg-secondary">{{ channel.category }}</span>
+                                        {% else %}
+                                            <span class="text-muted">미분류</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ channel.language.upper() }}</td>
+                                    <td>
+                                        {% if channel.is_active %}
+                                            <span class="badge bg-success">활성</span>
+                                        {% else %}
+                                            <span class="badge bg-danger">비활성</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">
+                                            {{ channel.created_at[:10] if channel.created_at else "알 수 없음" }}
+                                        </small>
+                                    </td>
+                                    <td>
+                                        <div class="btn-group btn-group-sm" role="group">
+                                            <form method="post" action="/channels/{{ channel.id }}/toggle" style="display: inline;">
+                                                <button type="submit" class="btn btn-sm {% if channel.is_active %}btn-warning{% else %}btn-success{% endif %}"
+                                                        title="{% if channel.is_active %}비활성화{% else %}활성화{% endif %}">
+                                                    <i class="fas {% if channel.is_active %}fa-pause{% else %}fa-play{% endif %}"></i>
+                                                </button>
+                                            </form>
+                                            <button class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#channelModal{{ channel.id }}" title="정보">
+                                                <i class="fas fa-info"></i>
+                                            </button>
+                                        </div>
+
+                                        <!-- 채널 정보 모달 -->
+                                        <div class="modal fade" id="channelModal{{ channel.id }}" tabindex="-1">
+                                            <div class="modal-dialog">
+                                                <div class="modal-content">
+                                                    <div class="modal-header">
+                                                        <h5 class="modal-title">{{ channel.name }} 정보</h5>
+                                                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                                    </div>
+                                                    <div class="modal-body">
+                                                        <dl class="row">
+                                                            <dt class="col-sm-3">ID</dt>
+                                                            <dd class="col-sm-9">{{ channel.id }}</dd>
+
+                                                            <dt class="col-sm-3">플랫폼</dt>
+                                                            <dd class="col-sm-9">
+                                                                <i class="fab fa-youtube text-danger"></i> {{ channel.platform.title() }}
+                                                            </dd>
+
+                                                            <dt class="col-sm-3">URL</dt>
+                                                            <dd class="col-sm-9">
+                                                                <a href="{{ channel.url }}" target="_blank">{{ channel.url }}</a>
+                                                            </dd>
+
+                                                            {% if channel.description %}
+                                                            <dt class="col-sm-3">설명</dt>
+                                                            <dd class="col-sm-9">{{ channel.description }}</dd>
+                                                            {% endif %}
+
+                                                            <dt class="col-sm-3">등록일</dt>
+                                                            <dd class="col-sm-9">{{ channel.created_at or "알 수 없음" }}</dd>
+
+                                                            <dt class="col-sm-3">마지막 수정</dt>
+                                                            <dd class="col-sm-9">{{ channel.updated_at or "알 수 없음" }}</dd>
+                                                        </dl>
+                                                    </div>
+                                                    <div class="modal-footer">
+                                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">닫기</button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-tv fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">등록된 채널이 없습니다</h5>
+                        <p class="text-muted">위 폼을 사용해서 첫 번째 YouTube 채널을 추가해보세요.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 도움말 -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="alert alert-info">
+            <h6><i class="fas fa-info-circle"></i> 채널 추가 가이드</h6>
+            <ul class="mb-0">
+                <li><strong>YouTube 채널 URL 형식:</strong> https://www.youtube.com/@channelname 또는 https://www.youtube.com/c/channelname</li>
+                <li><strong>자동 수집:</strong> 채널 추가 후 자동으로 최신 동영상들이 수집되기 시작합니다</li>
+                <li><strong>처리 시간:</strong> 동영상 수집 → STT 처리 → 벡터화 과정이 순차적으로 진행됩니다</li>
+                <li><strong>상태 변경:</strong> 비활성화된 채널은 새로운 콘텐츠 수집을 중단합니다</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // 폼 검증
+    document.addEventListener('DOMContentLoaded', function() {
+        const form = document.querySelector('form');
+        const urlInput = document.getElementById('url');
+
+        form.addEventListener('submit', function(e) {
+            const url = urlInput.value;
+            if (url && !url.includes('youtube.com')) {
+                e.preventDefault();
+                alert('YouTube 채널 URL을 입력해주세요.');
+                urlInput.focus();
+            }
+        });
+    });
+</script>
+{% endblock %}

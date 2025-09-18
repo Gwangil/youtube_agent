@@ -2,21 +2,27 @@ services:
   # Database Services
   postgres:
     image: postgres:15-alpine
-    container_name: podcast_postgres
+    container_name: youtube_postgres
     environment:
-      POSTGRES_DB: podcast_agent
-      POSTGRES_USER: podcast_user
-      POSTGRES_PASSWORD: podcast_pass
+      POSTGRES_DB: youtube_agent
+      POSTGRES_USER: youtube_user
+      POSTGRES_PASSWORD: youtube_pass
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
       - "5432:5432"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U youtube_user -d youtube_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: podcast_redis
+    container_name: youtube_redis
     volumes:
       - redis_data:/data
     ports:
@@ -26,7 +32,7 @@ services:
   # Vector Database
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: podcast_qdrant
+    container_name: youtube_qdrant
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
@@ -41,7 +47,7 @@ services:
       dockerfile: services/data-collector/Dockerfile
     container_name: youtube_data_collector
     environment:
-      - DATABASE_URL=postgresql://podcast_user:podcast_pass@postgres:5432/podcast_agent
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
       - REDIS_URL=redis://redis:6379
     volumes:
       - ./data:/app/data
@@ -51,23 +57,31 @@ services:
       - redis
     restart: unless-stopped
 
-  # Data Processing Service
-  data-processor:
+  # Whisper STT Server (GPU-enabled)
+  whisper-server:
     build:
       context: .
       dockerfile: services/data-processor/Dockerfile
-    container_name: youtube_data_processor
+    container_name: youtube_whisper_server
     environment:
-      - DATABASE_URL=postgresql://podcast_user:podcast_pass@postgres:5432/podcast_agent
-      - REDIS_URL=redis://redis:6379
-      - QDRANT_URL=http://qdrant:6333
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CUDA_VISIBLE_DEVICES=0
+      - WHISPER_MODEL_DIR=/app/models/whisper
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 300s
+      retries: 10
     volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
-    depends_on:
-      - postgres
-      - redis
-      - qdrant
+      - ./models:/app/models
+      - /tmp:/tmp
+    command: sh -c "python /app/services/data-processor/init_whisper_cache.py && python /app/services/data-processor/whisper_server.py"
     restart: unless-stopped
     deploy:
       resources:
@@ -77,6 +91,237 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # Embedding Server (Centralized embeddings)
+  embedding-server:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_embedding_server
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_PORT=8083
+      - CUDA_VISIBLE_DEVICES=0
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 10
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./models:/app/models
+    command: python /app/services/data-processor/embedding_server.py
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Data Processing Service (Main Controller)
+  data-processor:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_data_processor
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WHISPER_SERVER_URL=http://whisper-server:8082
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+      - whisper-server
+    restart: unless-stopped
+
+  # STT Workers (GPU-only, no CPU fallback)
+  stt-worker-1:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_1
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - WHISPER_SERVER_URL=http://whisper-server:8082
+      - STT_WORKER_ID=0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/improved_stt_worker.py
+    depends_on:
+      - postgres
+      - whisper-server
+    restart: unless-stopped
+
+  stt-worker-2:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_2
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - WHISPER_SERVER_URL=http://whisper-server:8082
+      - STT_WORKER_ID=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/improved_stt_worker.py
+    depends_on:
+      - postgres
+      - whisper-server
+    restart: unless-stopped
+
+  stt-worker-3:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_3
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - WHISPER_SERVER_URL=http://whisper-server:8082
+      - STT_WORKER_ID=2
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/improved_stt_worker.py
+    depends_on:
+      - postgres
+      - whisper-server
+    restart: unless-stopped
+
+  # Vectorization Workers (Scaled Out)
+  vectorize-worker-1:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_vectorize_worker_1
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server:8083
+      - VECTORIZE_WORKER_ID=0
+      - TOTAL_VECTORIZE_WORKERS=3
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/improved_vectorize_worker.py
+    depends_on:
+      - postgres
+      - qdrant
+      - embedding-server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  vectorize-worker-2:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_vectorize_worker_2
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server:8083
+      - VECTORIZE_WORKER_ID=1
+      - TOTAL_VECTORIZE_WORKERS=3
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/improved_vectorize_worker.py
+    depends_on:
+      - postgres
+      - qdrant
+      - embedding-server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  vectorize-worker-3:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_vectorize_worker_3
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server:8083
+      - VECTORIZE_WORKER_ID=2
+      - TOTAL_VECTORIZE_WORKERS=3
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/improved_vectorize_worker.py
+    depends_on:
+      - postgres
+      - qdrant
+      - embedding-server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Monitoring Dashboard
+  monitoring-dashboard:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_monitoring
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/monitoring_api.py
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
   # Agent Service
   agent-service:
     build:
@@ -84,7 +329,7 @@ services:
       dockerfile: services/agent-service/Dockerfile
     container_name: youtube_agent_service
     environment:
-      - DATABASE_URL=postgresql://podcast_user:podcast_pass@postgres:5432/podcast_agent
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
       - QDRANT_URL=http://qdrant:6333
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     ports:
@@ -112,6 +357,23 @@ services:
       - agent-service
     restart: unless-stopped
 
+  # Admin Dashboard (통합 관리 페이지)
+  admin-dashboard:
+    build:
+      context: ./services/admin-dashboard
+      dockerfile: Dockerfile
+    container_name: youtube_admin_dashboard
+    environment:
+      - AGENT_API_URL=http://agent-service:8000
+      - MONITORING_URL=http://localhost:8081
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./services/admin-dashboard:/app
+    depends_on:
+      - agent-service
+    restart: unless-stopped
+
 volumes:
   postgres_data:
     driver: local
@@ -124,4 +386,4 @@ volumes:
 
 networks:
   default:
-    name: podcast_network
+    name: youtube_network

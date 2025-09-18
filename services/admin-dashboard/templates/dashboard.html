@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}대시보드 - YouTube Agent{% endblock %}
+
+{% block header %}시스템 대시보드{% endblock %}
+
+{% block content %}
+<div class="row">
+    <!-- 통계 카드들 -->
+    <div class="col-md-3 mb-4">
+        <div class="card status-card">
+            <div class="card-body">
+                <h5 class="card-title text-muted">총 채널</h5>
+                <h2 class="text-primary">{{ stats.channels.total if stats and stats.channels else 0 }}</h2>
+                <small class="text-success">활성: {{ stats.channels.active if stats and stats.channels else 0 }}</small>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-4">
+        <div class="card status-card">
+            <div class="card-body">
+                <h5 class="card-title text-muted">총 콘텐츠</h5>
+                <h2 class="text-info">{{ stats.content.total if stats and stats.content else 0 }}</h2>
+                <small>처리됨: {{ stats.content.processed if stats and stats.content else 0 }}</small>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-4">
+        <div class="card status-card {{ 'status-warning' if stats and stats.content and stats.content.processing_rate < 80 else '' }}">
+            <div class="card-body">
+                <h5 class="card-title text-muted">처리율</h5>
+                <h2 class="text-warning">{{ stats.content.processing_rate if stats and stats.content else 0 }}%</h2>
+                <div class="progress" style="height: 5px;">
+                    <div class="progress-bar bg-warning" role="progressbar"
+                         style="width: {{ stats.content.processing_rate if stats and stats.content else 0 }}%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-3 mb-4">
+        <div class="card status-card">
+            <div class="card-body">
+                <h5 class="card-title text-muted">시스템 상태</h5>
+                <h2 class="text-success"><i class="fas fa-check-circle"></i></h2>
+                <small>모든 서비스 정상</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <!-- 빠른 작업 -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-rocket"></i> 빠른 작업
+            </div>
+            <div class="card-body">
+                <div class="d-grid gap-2">
+                    <a href="/channels" class="btn btn-primary">
+                        <i class="fas fa-plus"></i> 새 채널 추가
+                    </a>
+                    <a href="/monitoring" class="btn btn-info">
+                        <i class="fas fa-chart-line"></i> 처리 현황 보기
+                    </a>
+                    <a href="http://localhost:3000" target="__blank" class="btn btn-success">
+                        <i class="fas fa-comments"></i> 채팅 UI 열기
+                    </a>
+                    <a href="/api-docs" class="btn btn-warning">
+                        <i class="fas fa-code"></i> API 테스트
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 시스템 정보 -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-info-circle"></i> 시스템 정보
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tbody>
+                        <tr>
+                            <td><strong>API 서버</strong></td>
+                            <td><span class="badge bg-success">온라인</span> http://localhost:8000</td>
+                        </tr>
+                        <tr>
+                            <td><strong>채팅 UI</strong></td>
+                            <td><span class="badge bg-success">온라인</span> http://localhost:3000</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Qdrant</strong></td>
+                            <td><span class="badge bg-success">온라인</span> http://localhost:6333</td>
+                        </tr>
+                        <tr>
+                            <td><strong>PostgreSQL</strong></td>
+                            <td><span class="badge bg-success">온라인</span> localhost:5432</td>
+                        </tr>
+                        <tr>
+                            <td><strong>업데이트 시간</strong></td>
+                            <td>{{ timestamp }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <!-- 플랫폼별 채널 분포 -->
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-chart-pie"></i> 플랫폼별 채널 분포
+            </div>
+            <div class="card-body">
+                {% if stats and stats.channels and stats.channels.by_platform %}
+                <div class="row">
+                    {% for platform, count in stats.channels.by_platform.items() %}
+                    <div class="col-md-4">
+                        <div class="d-flex align-items-center">
+                            <i class="fab fa-{{ platform }} fa-2x me-3 text-danger"></i>
+                            <div>
+                                <strong>{{ platform | capitalize }}</strong><br>
+                                <small>{{ count }} 채널</small>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted">데이터 없음</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

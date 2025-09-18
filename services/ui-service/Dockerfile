@@ -1,4 +1,4 @@
-FROM ghcr.io/open-webui/open-webui:main
+FROM ghcr.io/open-webui/open-webui:latest
 
 # Copy custom configuration if needed
 # COPY config/open-webui.yaml /app/backend/data/

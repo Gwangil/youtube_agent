@@ -106,7 +106,7 @@ class VectorMapping(Base):
 def get_database_url():
     return os.getenv(
         'DATABASE_URL',
-        'postgresql://podcast_user:podcast_pass@localhost:5432/podcast_agent'
+        'postgresql://youtube_user:youtube_pass@localhost:5432/youtube_agent'
     )
 
 def create_engine_instance():

@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}모니터링 - YouTube Agent{% endblock %}
+
+{% block header %}시스템 모니터링{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-chart-line"></i> 실시간 모니터링 대시보드</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <i class="fas fa-info-circle"></i>
+                    외부 모니터링 대시보드가 <a href="{{ monitoring_url }}" target="_blank">{{ monitoring_url }}</a>에서 실행 중입니다.
+                    아래 프레임에서 직접 확인하거나 새 창에서 열어보세요.
+                </div>
+
+                <iframe
+                    src="{{ monitoring_url }}"
+                    style="width: 100%; height: 600px; border: 1px solid #ddd; border-radius: 5px;"
+                    title="Monitoring Dashboard">
+                </iframe>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-server"></i> 서비스 상태</h5>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Data Collector
+                        <span class="badge bg-success">운영 중</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Data Processor
+                        <span class="badge bg-success">운영 중</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Agent Service
+                        <span class="badge bg-success">운영 중</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        PostgreSQL
+                        <span class="badge bg-success">운영 중</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Qdrant
+                        <span class="badge bg-success">운영 중</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        Redis
+                        <span class="badge bg-success">운영 중</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-tasks"></i> 작업 큐 상태</h5>
+            </div>
+            <div class="card-body">
+                <div id="queueStatus">
+                    <div class="mb-3">
+                        <label class="form-label">수집 대기</label>
+                        <div class="progress">
+                            <div class="progress-bar bg-info" role="progressbar" style="width: 25%">25</div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">STT 처리 중</label>
+                        <div class="progress">
+                            <div class="progress-bar bg-warning" role="progressbar" style="width: 60%">60</div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">벡터화 대기</label>
+                        <div class="progress">
+                            <div class="progress-bar bg-primary" role="progressbar" style="width: 15%">15</div>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">완료</label>
+                        <div class="progress">
+                            <div class="progress-bar bg-success" role="progressbar" style="width: 85%">850</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-terminal"></i> 시스템 로그</h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-2">
+                    <button class="btn btn-sm btn-outline-primary" onclick="fetchLogs('all')">전체</button>
+                    <button class="btn btn-sm btn-outline-info" onclick="fetchLogs('collector')">Collector</button>
+                    <button class="btn btn-sm btn-outline-warning" onclick="fetchLogs('processor')">Processor</button>
+                    <button class="btn btn-sm btn-outline-success" onclick="fetchLogs('agent')">Agent</button>
+                </div>
+                <pre id="logOutput" class="bg-dark text-light p-3" style="height: 300px; overflow-y: scroll;">
+로그를 불러오는 중...
+                </pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 로그 가져오기 함수
+async function fetchLogs(service) {
+    const logDiv = document.getElementById('logOutput');
+    logDiv.textContent = `${service} 로그를 불러오는 중...`;
+
+    // 실제 구현에서는 WebSocket 또는 SSE를 사용하여 실시간 로그 스트리밍
+    // 여기서는 시뮬레이션
+    setTimeout(() => {
+        const sampleLogs = `
+[2025-09-18 10:30:15] INFO: ${service} service started
+[2025-09-18 10:30:20] INFO: Connected to database
+[2025-09-18 10:30:25] INFO: Processing job #1234
+[2025-09-18 10:30:30] DEBUG: Job completed successfully
+[2025-09-18 10:30:35] INFO: Queue size: 42
+[2025-09-18 10:30:40] INFO: Health check passed
+        `.trim();
+        logDiv.textContent = sampleLogs;
+    }, 500);
+}
+
+// 페이지 로드 시 전체 로그 가져오기
+document.addEventListener('DOMContentLoaded', () => {
+    fetchLogs('all');
+
+    // 5초마다 상태 업데이트 (실제로는 WebSocket 사용 권장)
+    setInterval(() => {
+        // 큐 상태 업데이트 로직
+        console.log('Updating queue status...');
+    }, 5000);
+});
+</script>
+{% endblock %}

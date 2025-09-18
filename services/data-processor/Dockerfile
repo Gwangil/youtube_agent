@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
     build-essential \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
@@ -26,8 +27,15 @@ COPY src/ ./src/
 # Copy data processor service
 COPY services/data-processor/ ./
 
-# Create data directory
-RUN mkdir -p /app/data
+# Copy scripts
+COPY scripts/ ./scripts/
+
+# Copy pre-downloaded models (if exists)
+# This will copy models if they exist, otherwise continue
+COPY models/ /app/models/
+
+# Create data and model directories
+RUN mkdir -p /app/data /app/models/whisper /app/models/embeddings
 
 # Set environment variables
 ENV PYTHONPATH=/app:/app/shared:/app/src

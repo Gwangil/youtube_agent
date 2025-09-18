@@ -229,3 +229,54 @@ class YouTubeExtractor:
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
         return filepath
+
+    def download_audio(self, video_url: str, video_id: str) -> Optional[str]:
+        """YouTube 비디오에서 오디오 다운로드 (STT 처리용)
+
+        Args:
+            video_url: YouTube 비디오 URL
+            video_id: YouTube 비디오 ID
+
+        Returns:
+            다운로드된 오디오 파일 경로 또는 None
+        """
+        import tempfile
+
+        try:
+            # 임시 디렉토리 생성
+            temp_dir = tempfile.mkdtemp(prefix="youtube_audio_")
+
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'outtmpl': os.path.join(temp_dir, f'{video_id}.%(ext)s'),
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'wav',
+                    'preferredquality': '192',
+                }],
+                'quiet': True,
+                'no_warnings': True,
+            }
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+
+                # 다운로드된 파일 찾기
+                for ext in ['wav', 'mp3', 'm4a', 'webm']:
+                    audio_file = os.path.join(temp_dir, f"{video_id}.{ext}")
+                    if os.path.exists(audio_file):
+                        print(f"✅ 오디오 다운로드 완료: {audio_file}")
+                        return audio_file
+
+                # 파일이 없으면 기본 패턴으로 다시 찾기
+                import glob
+                audio_files = glob.glob(os.path.join(temp_dir, f"{video_id}.*"))
+                if audio_files:
+                    print(f"✅ 오디오 다운로드 완료: {audio_files[0]}")
+                    return audio_files[0]
+
+                return None
+
+        except Exception as e:
+            print(f"❌ 오디오 다운로드 실패: {e}")
+            return None

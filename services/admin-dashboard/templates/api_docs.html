@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}API 문서 - YouTube Agent{% endblock %}
+
+{% block header %}API 문서 및 테스트{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-code"></i> Swagger UI</h5>
+            </div>
+            <div class="card-body p-0">
+                <iframe
+                    src="{{ api_url }}/docs"
+                    style="width: 100%; height: 800px; border: none;"
+                    title="Swagger UI">
+                </iframe>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-terminal"></i> API 빠른 테스트</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6>헬스체크</h6>
+                        <pre><code>curl {{ api_url }}/health</code></pre>
+                        <button class="btn btn-sm btn-primary" onclick="testAPI('/health')">
+                            테스트 실행
+                        </button>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>통계 조회</h6>
+                        <pre><code>curl {{ api_url }}/stats</code></pre>
+                        <button class="btn btn-sm btn-primary" onclick="testAPI('/stats')">
+                            테스트 실행
+                        </button>
+                    </div>
+                </div>
+
+                <hr class="my-3">
+
+                <div class="row">
+                    <div class="col-12">
+                        <h6>콘텐츠 검색</h6>
+                        <pre><code>curl -X POST {{ api_url }}/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "경제", "limit": 5}'</code></pre>
+                        <button class="btn btn-sm btn-primary" onclick="testSearch()">
+                            테스트 실행
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mt-3">
+                    <h6>테스트 결과:</h6>
+                    <pre id="testResult" class="bg-dark text-light p-3" style="min-height: 100px;">
+결과가 여기에 표시됩니다...
+                    </pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="alert alert-info">
+            <h6><i class="fas fa-info-circle"></i> API 사용 안내</h6>
+            <ul class="mb-0">
+                <li><strong>Base URL:</strong> {{ api_url }}</li>
+                <li><strong>인증:</strong> 현재 인증 없이 사용 가능 (개발 모드)</li>
+                <li><strong>OpenAPI 스펙:</strong> <a href="{{ api_url }}/openapi.json" target="_blank">{{ api_url }}/openapi.json</a></li>
+                <li><strong>ReDoc:</strong> <a href="{{ api_url }}/redoc" target="_blank">{{ api_url }}/redoc</a></li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function testAPI(endpoint) {
+    const resultDiv = document.getElementById('testResult');
+    resultDiv.textContent = '요청 중...';
+
+    try {
+        const response = await fetch('{{ api_url }}' + endpoint);
+        const data = await response.json();
+        resultDiv.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        resultDiv.textContent = 'Error: ' + error.message;
+    }
+}
+
+async function testSearch() {
+    const resultDiv = document.getElementById('testResult');
+    resultDiv.textContent = '요청 중...';
+
+    try {
+        const response = await fetch('{{ api_url }}/search', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                query: '경제',
+                limit: 5
+            })
+        });
+        const data = await response.json();
+        resultDiv.textContent = JSON.stringify(data, null, 2);
+    } catch (error) {
+        resultDiv.textContent = 'Error: ' + error.message;
+    }
+}
+</script>
+{% endblock %}
