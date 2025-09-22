@@ -9,6 +9,8 @@ YouTube 채널 콘텐츠를 자동으로 수집하고 AI 기반 질의응답을 
 - 🔍 **RAG 기반 검색** - 타임스탬프 링크 포함 정확한 답변
 - 💰 **비용 관리 시스템** - OpenAI API 사용 시 자동 비용 제한
 - 🖥️ **유연한 인프라** - GPU/CPU 환경 자동 감지 및 최적 모드 실행
+- 📊 **콘텐츠 관리 시스템** - Soft Delete 및 개별/일괄 활성화 제어
+- 🔄 **Vector DB 동기화** - 실시간 콘텐츠 상태 반영
 
 ## 🚀 빠른 시작
 
@@ -135,11 +137,14 @@ docker-compose -f docker-compose.base.yml -f docker-compose.[gpu|cpu].yml down -
 
 ### 데이터 관리
 ```bash
-# 채널 추가 (Admin Dashboard)
+# 채널 관리 (추가/활성화/비활성화)
 http://localhost:8090/channels
 
-# 처리 상태 확인
-http://localhost:8081/api/status
+# 콘텐츠 관리 (개별/일괄 제어, 정렬, 필터링)
+http://localhost:8090/contents
+
+# 처리 상태 모니터링
+http://localhost:8081
 
 # 비용 승인 (OpenAI API 모드)
 http://localhost:8084
@@ -150,6 +155,21 @@ docker exec youtube_postgres pg_dump -U youtube_user youtube_agent > backup.sql
 # 데이터베이스 복구
 docker exec -i youtube_postgres psql -U youtube_user youtube_agent < backup.sql
 ```
+
+---
+
+## 📚 프로젝트 문서
+
+### 핵심 문서
+- [README.md](./README.md) - 프로젝트 개요 (이 문서)
+- [CLAUDE.md](./CLAUDE.md) - 개발자 가이드
+
+### 상세 문서 (docs 폴더)
+- [ARCHITECTURE.md](./docs/ARCHITECTURE.md) - 시스템 아키텍처
+- [ROADMAP.md](./docs/ROADMAP.md) - 개발 로드맵
+- [PROJECT_STATUS.md](./docs/PROJECT_STATUS.md) - 현재 프로젝트 상태
+- [TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) - 문제 해결 가이드
+- [PROJECT_STRUCTURE.md](./docs/PROJECT_STRUCTURE.md) - 프로젝트 구조
 
 ## 🚨 문제 해결
 
