@@ -19,6 +19,8 @@ ffmpeg-python>=0.2.0       # 오디오/비디오 처리
 # Speech-to-Text (STT)
 # --------------------
 openai-whisper>=20231117   # Whisper STT 모델
+librosa>=0.10.0            # 오디오 처리 (청크 분할용)
+soundfile>=0.12.0          # 오디오 파일 I/O
 # torch>=2.0.0             # PyTorch (Whisper 의존성, GPU 버전 별도 설치 필요)
 # transformers>=4.36.0     # Hugging Face Transformers (선택사항)
 

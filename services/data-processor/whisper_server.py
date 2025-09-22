@@ -11,11 +11,14 @@ import re
 import tempfile
 import torch
 import whisper
+import numpy as np
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import uvicorn
+import librosa
+import soundfile as sf
 
 app = FastAPI(title="Whisper STT Server")
 
@@ -203,6 +206,122 @@ class WhisperServer:
 
         return ' '.join(cleaned_words)
 
+    def _get_audio_info(self, audio_path: str) -> Dict:
+        """오디오 파일 정보 가져오기"""
+        try:
+            audio, sr = librosa.load(audio_path, sr=None, duration=1)  # 1초만 로드하여 정보 확인
+            duration = librosa.get_duration(path=audio_path)
+            return {
+                'duration': duration,
+                'sample_rate': sr
+            }
+        except Exception as e:
+            print(f"⚠️ 오디오 정보 로드 실패: {e}")
+            # 폴백: 전체 로드 (메모리 많이 사용)
+            audio, sr = librosa.load(audio_path, sr=None)
+            return {
+                'duration': len(audio) / sr,
+                'sample_rate': sr
+            }
+
+    def _transcribe_chunked(self, audio_path: str, language: str = "ko") -> Dict:
+        """긴 오디오를 청크로 분할하여 처리"""
+        chunk_duration = 5 * 60  # 5분 단위로 분할
+        overlap_duration = 10  # 10초 오버랩 (문장 잘림 방지)
+
+        # 오디오 로드
+        print(f"  📂 오디오 파일 로드 중...")
+        audio, sr = librosa.load(audio_path, sr=16000)  # Whisper는 16kHz 사용
+        total_duration = len(audio) / sr
+
+        # 청크 계산
+        chunk_samples = chunk_duration * sr
+        overlap_samples = overlap_duration * sr
+
+        all_segments = []
+        current_offset = 0.0
+        chunk_count = 0
+
+        print(f"  🔄 총 {int(np.ceil(total_duration / chunk_duration))}개 청크 처리 예정")
+
+        # GPU 메모리 정리
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        for start_sample in range(0, len(audio), chunk_samples - overlap_samples):
+            chunk_count += 1
+            end_sample = min(start_sample + chunk_samples, len(audio))
+            chunk = audio[start_sample:end_sample]
+
+            # 청크 시간 정보
+            chunk_start_time = start_sample / sr
+            chunk_end_time = end_sample / sr
+
+            print(f"  📍 청크 {chunk_count} 처리 중 ({chunk_start_time/60:.1f}~{chunk_end_time/60:.1f}분)")
+
+            # 임시 파일로 청크 저장
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
+                sf.write(tmp_file.name, chunk, sr)
+
+                # Whisper 처리
+                options = {
+                    "language": language,
+                    "beam_size": 1,
+                    "best_of": 1,
+                    "temperature": (0.0, 0.2, 0.4, 0.6, 0.8),
+                    "compression_ratio_threshold": 2.0,
+                    "logprob_threshold": -0.8,
+                    "no_speech_threshold": 0.7,
+                    "condition_on_previous_text": False,
+                    "initial_prompt": None
+                }
+
+                try:
+                    chunk_result = self.model.transcribe(tmp_file.name, **options)
+
+                    # 세그먼트 시간 조정 (전체 오디오 기준)
+                    for segment in chunk_result['segments']:
+                        segment['start'] += chunk_start_time
+                        segment['end'] += chunk_start_time
+
+                        # 오버랩 영역 처리 (이전 청크와 중복되는 부분 제거)
+                        if chunk_count > 1 and segment['start'] < current_offset:
+                            continue
+
+                        all_segments.append(segment)
+
+                    # 다음 청크를 위한 오프셋 업데이트
+                    if chunk_result['segments']:
+                        current_offset = chunk_result['segments'][-1]['end'] - 5  # 5초 여유
+
+                except Exception as e:
+                    print(f"  ❌ 청크 {chunk_count} 처리 실패: {e}")
+
+                finally:
+                    # 임시 파일 삭제
+                    os.unlink(tmp_file.name)
+
+                    # GPU 메모리 정리
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+
+        print(f"  ✅ 모든 청크 처리 완료")
+
+        # 반복 제거 후처리
+        cleaned_segments = self._remove_repetitive_segments(all_segments)
+
+        return {
+            "segments": cleaned_segments,
+            "language": language,
+            "model_info": {
+                "model": self.model_name,
+                "device": self.device_info,
+                "processing_mode": "chunked",
+                "chunk_duration": chunk_duration,
+                "total_chunks": chunk_count
+            }
+        }
+
     def _remove_repetitive_segments(self, segments: List[Dict]) -> List[Dict]:
         """반복되는 세그먼트 제거 및 텍스트 정리"""
         if not segments:
@@ -280,13 +399,27 @@ class WhisperServer:
         return intersection / union if union > 0 else 0.0
 
     def transcribe_audio(self, audio_path: str, language: str = "ko") -> Dict:
-        """오디오 파일 STT 처리"""
+        """오디오 파일 STT 처리 (자동 분할 처리)"""
         if not self.model:
-            raise Exception("모델이 로딩되지 않았습니다")
+            raise Exception("모델이 로딥되지 않았습니다")
 
         try:
             print(f"🎙️ STT 처리 시작: {os.path.basename(audio_path)}")
             start_time = datetime.now()
+
+            # 오디오 길이 확인
+            audio_info = self._get_audio_info(audio_path)
+            duration_minutes = audio_info['duration'] / 60
+
+            print(f"  ⏱️ 오디오 길이: {duration_minutes:.1f}분")
+
+            # 10분 이상인 경우 분할 처리
+            if duration_minutes > 10:
+                print(f"  ✂️ 긴 오디오 감지. 분할 처리 시작...")
+                return self._transcribe_chunked(audio_path, language)
+
+            # 10분 이하는 기존 방식으로 처리
+            print(f"  🎯 일반 처리 모드")
 
             # Whisper 처리 옵션 (강화된 반복 방지)
             options = {

@@ -616,3 +616,4 @@ if not content.is_active:
 - **컨테이너 정리**: cleanup_old_containers.sh 스크립트 추가
 - to memorize
 - to memorize and update docs
+- to memorize
