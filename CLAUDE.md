@@ -7,11 +7,12 @@
 **YouTube Content Agent**는 YouTube 채널 콘텐츠를 자동으로 수집, 처리하여 RAG(Retrieval-Augmented Generation) 기반 AI 질의응답 서비스를 제공하는 지능형 콘텐츠 분석 플랫폼입니다.
 
 ### 핵심 기능
-- YouTube 채널 자동 수집 및 STT 처리 (Whisper Large 모델)
-- 문장 기반 의미 청킹으로 정확한 컨텍스트 보존
+- YouTube 채널 자동 수집 및 STT 처리 (Whisper Large-v3 GPU + OpenAI API 폴백)
+- 문장 기반 의미 청킹으로 정확한 컨텍스트 보존 (300-800자 단위)
 - YouTube 타임스탬프 링크가 포함된 RAG 답변 제공
-- OpenAI 호환 API로 OpenWebUI 연동 지원
+- OpenAI 호환 API로 OpenWebUI 연동 지원 (타임아웃 120초)
 - LangGraph 기반 지능형 에이전트 워크플로우
+- STT 비용 관리 시스템 (일일/월별 한도 설정)
 
 ## 🏗️ 시스템 아키텍처
 
@@ -42,14 +43,20 @@ docker restart youtube_data_collector     # 데이터 수집
 docker restart youtube_admin_dashboard    # 관리 대시보드 (포트: 8090)
 ```
 
-### 서비스별 역할
-- **postgres**: 메타데이터 저장 (채널, 콘텐츠, 작업 큐)
-- **redis**: 작업 큐 및 캐시
+### 서비스별 역할 (18개 컨테이너)
+- **postgres**: 메타데이터 저장 (채널, 콘텐츠, 작업 큐, 트랜스크립트)
+- **redis**: 작업 큐, 캐시, 비용 승인 대기열
 - **qdrant**: 벡터 데이터베이스 (포트: 6333)
+- **whisper-server**: Whisper Large-v3 GPU 서버 (포트: 8082)
+- **embedding-server**: BGE-M3 임베딩 서버 (포트: 8083, 1024차원)
+- **stt-cost-api**: STT 비용 관리 API (포트: 8084)
+- **monitoring-dashboard**: 시스템 모니터링 (포트: 8081)
 - **data-collector**: YouTube 채널 수집
-- **data-processor**: STT 처리 및 벡터화
+- **data-processor**: STT/벡터화 오케스트레이터
+- **stt-worker-1~3**: STT 처리 워커 (GPU → OpenAI API 폴백)
+- **vectorize-worker-1~3**: 벡터화 워커 (Summary + Chunks)
 - **agent-service**: RAG 에이전트 API (포트: 8000) + Swagger UI
-- **admin-dashboard**: 통합 관리 대시보드 (포트: 8090) 🆕
+- **admin-dashboard**: 통합 관리 대시보드 (포트: 8090)
 - **ui-service**: OpenWebUI 채팅 인터페이스 (포트: 3000)
 
 ## 📁 프로젝트 구조
@@ -86,7 +93,7 @@ result = self.model.transcribe(
     best_of=1,
     temperature=(0.0, 0.2, 0.4, 0.6, 0.8),  # 온도 폴백
     condition_on_previous_text=False,
-    initial_prompt="다음은 한국어 팟캐스트입니다."
+    initial_prompt=None  # 텍스트 오염 방지를 위해 제거
 )
 
 # 반복 텍스트 제거 함수들
@@ -126,7 +133,7 @@ workflow.add_node("refine", self._refine_node)
 ```
 
 ### 5. OpenAI API 폴백 시스템
-**파일**: `services/data-processor/improved_stt_worker.py`
+**파일**: `services/data-processor/stt_worker.py`
 
 ```python
 # GPU 서버 우선 시도
@@ -298,42 +305,72 @@ pip freeze > requirements.txt
 
 ### ✅ 완료된 기능
 - [x] YouTube 콘텐츠 수집 파이프라인
-- [x] Whisper Large 모델 STT 처리
-- [x] 반복 텍스트 제거 로직
-- [x] 문장 기반 의미 청킹
-- [x] YouTube 타임스탬프 링크 생성
-- [x] LangGraph RAG 에이전트
-- [x] OpenWebUI 연동
-- [x] 통합 관리 대시보드 구현 🆕
-- [x] Swagger UI API 문서화 🆕
-- [x] 웹 UI 기반 채널 관리 🆕
-- [x] GPU 서버 헬스체크 구현 (curl 기반) 🆕
-- [x] OpenAI API 폴백 시스템 (CPU 폴백 제거) 🆕
-- [x] 서비스 라이프사이클 관리 명령 🆕
-- [x] 데이터 무결성 보장 메커니즘 🆕
+- [x] Whisper Large-v3 모델 STT 처리 (GPU 서버)
+- [x] OpenAI Whisper API 폴백 시스템 (비용 관리 포함)
+- [x] 반복 텍스트 제거 및 할루시네이션 방지
+- [x] 문장 기반 의미 청킹 (300-800자 단위)
+- [x] YouTube 타임스탬프 링크 자동 생성
+- [x] LangGraph 기반 RAG 에이전트
+- [x] OpenWebUI 연동 (타임아웃 120초 설정)
+- [x] 통합 관리 대시보드 (포트 8090)
+- [x] Swagger UI API 문서화 (포트 8000/docs)
+- [x] STT 비용 관리 시스템 (일일/월별 한도)
+- [x] BGE-M3 임베딩 서버 (1024차원)
+- [x] 다층 벡터 저장 (summaries + content)
+- [x] 데이터 정제 시스템 (불필요한 텍스트 자동 제거)
+- [x] RAG 점수 임계값 최적화 (0.55)
 
-### 🔄 현재 진행 중
-- [ ] STT 처리 완료 대기 (Whisper Large 모델 로딩 중)
-- [ ] 개선된 벡터화 파이프라인 테스트
+### 🔄 현재 운영 상태
+- **수집된 콘텐츠**: 10개 YouTube 채널, 36,208개 트랜스크립트
+- **벡터 DB 상태**:
+  - youtube_content: 7,448 포인트 (활발히 사용)
+  - youtube_summaries: 10 포인트 (활발히 사용)
+  - youtube_paragraphs: 5,729 포인트 (레거시, 미사용)
+  - youtube_full_texts: 10 포인트 (레거시, 미사용)
+- **서비스 상태**: 18개 컨테이너 모두 정상 작동 중
+- **데이터 품질**: 모든 "한국어 팟캐스트" 관련 오염 텍스트 제거 완료
 
 ### 💡 향후 개선 방향
+- [ ] 레거시 컬렉션 정리 (paragraphs, full_texts)
 - [ ] 주제 기반 클러스터링 알고리즘
-- [ ] 다국어 지원 확장
-- [ ] 실시간 콘텐츠 모니터링
+- [ ] 다국어 지원 확장 (현재 한국어 특화)
+- [ ] 실시간 콘텐츠 모니터링 및 자동 업데이트
 - [ ] 멀티모달 분석 (비디오 썸네일, 자막)
+- [ ] 더 큰 컨텍스트 윈도우 지원 (현재 800자)
 
 ## 📞 주요 API 엔드포인트
 
+### RAG 에이전트 (포트 8000)
 ```
 GET  /                           # 서비스 상태
 GET  /health                     # 헬스체크
+GET  /docs                       # Swagger UI 문서
 GET  /v1/models                  # OpenAI 호환 모델 목록
 POST /v1/chat/completions        # OpenAI 호환 채팅
 POST /search                     # 콘텐츠 검색
-POST /ask                        # 질문 답변
-GET  /trending                   # 인기 토픽
-GET  /channels                   # 채널 목록
-GET  /stats                      # 서비스 통계
+POST /ask                        # 질문 답변 (LangGraph)
+```
+
+### 관리 대시보드 (포트 8090)
+```
+GET  /                           # 대시보드 메인
+GET  /channels                   # 채널 관리
+GET  /stats                      # 시스템 통계
+```
+
+### STT 비용 관리 (포트 8084)
+```
+GET  /                           # 비용 대시보드
+GET  /api/cost-summary           # 비용 요약
+GET  /api/pending-approvals      # 승인 대기 목록
+POST /api/approve/{approval_id}  # 비용 승인
+POST /api/reject/{approval_id}   # 비용 거부
+```
+
+### 모니터링 (포트 8081)
+```
+GET  /api/status                 # 처리 상태
+GET  /api/queue                  # 작업 큐 현황
 ```
 
 ---
@@ -441,18 +478,15 @@ test/
   - RAG 응답: 3초 이내
 
 ---
-**마지막 업데이트**: 2025-09-18
-**주요 개선사항**:
-- STT 반복 텍스트 및 할루시네이션 제거
-- 문장 기반 의미 청킹 구현
-- YouTube 타임스탬프 링크 자동 생성
-- 통합 관리 대시보드 구현
-- Swagger UI 통합 및 API 문서화
-- 웹 UI 기반 채널 관리 시스템
-- GPU 서버 헬스체크 (curl 기반) 구현
-- OpenAI API 폴백 시스템 구현 (CPU 폴백 제거)
-- 서비스 라이프사이클 관리 명령 추가
-- 데이터 무결성 보장 메커니즘 구현
-- 포괄적인 운영 문서화 완료
+**마지막 업데이트**: 2025-09-22
+**최근 주요 개선사항**:
+- OpenWebUI 타임아웃 120초로 증가 (LLM 응답 시간 고려)
+- RAG 점수 임계값 0.8→0.55 하향 (더 많은 관련 콘텐츠 포함)
+- 모든 데이터에서 "한국어 팟캐스트" 오염 텍스트 제거 완료
+- vectorize_worker.py에 Summary 생성 기능 통합
+- enhanced_vectorizer.py 기능을 vectorize_worker.py로 통합
+- docker-compose.yml 볼륨 매핑 수정 (stt-cost-api)
+- STT 비용 관리자 import 오류 수정 (List, HTMLResponse)
+- 4개 Qdrant 컬렉션 전체 데이터 정제 완료
 - to memorize
 - to memorize

@@ -1,483 +1,296 @@
-# YouTube Content Agent 🎬
+# YouTube Content Agent 🎬🤖
 
-YouTube 채널 콘텐츠를 자동으로 수집하고, RAG(Retrieval-Augmented Generation) 기반 AI 에이전트를 통해 질의응답 서비스를 제공하는 지능형 콘텐츠 분석 플랫폼입니다.
+YouTube 콘텐츠를 자동으로 수집, 분석하여 지능형 질의응답을 제공하는 RAG(Retrieval-Augmented Generation) 기반 AI 플랫폼
 
 ## ✨ 주요 기능
 
-- **자동 콘텐츠 수집**: YouTube 채널의 모든 동영상을 자동으로 수집 및 업데이트
-- **고품질 음성 인식**: Whisper Large 모델을 활용한 정확한 한국어 STT 처리
-- **다층 지식 구조**: 요약, 전문, 문단, 청크 단위의 다층 벡터 검색
-- **지능형 텍스트 청킹**: 문장 기반 의미 단위 분할로 맥락 보존
-- **타임스탬프 연동**: 답변과 함께 원본 YouTube 영상의 정확한 시점으로 이동 가능한 링크 제공
-- **RAG 기반 응답**: LangGraph를 활용한 다단계 검색-생성-개선 워크플로우
-- **통합 임베딩**: BGE-M3 모델 (1024차원) 기반 일관된 벡터 처리
-- **통합 관리 대시보드**: 웹 UI를 통한 채널 관리, 모니터링, API 테스트
-- **Swagger UI 지원**: 대화형 API 문서 및 테스트 환경 제공
-- **OpenWebUI 통합**: 사용자 친화적인 채팅 인터페이스 제공
+- 🎙️ **고품질 STT 처리**: Whisper Large-v3 GPU 서버 + OpenAI API 폴백
+- 📊 **지능형 벡터화**: BGE-M3 임베딩 (1024차원) + 의미 기반 청킹
+- 🔍 **정확한 검색**: LangGraph 기반 RAG 에이전트 + YouTube 타임스탬프 링크
+- 💬 **편리한 인터페이스**: OpenWebUI 채팅 + Swagger API 문서
+- 💰 **비용 관리**: STT API 사용량 추적 및 한도 설정
+- 📈 **모니터링**: 실시간 처리 상태 및 시스템 통계
 
 ## 🚀 빠른 시작
 
-### 전제 조건
-- Docker 및 Docker Compose
+### 필수 요구사항
+- Docker & Docker Compose
+- NVIDIA GPU (선택사항, STT 성능 향상)
 - OpenAI API Key
-- 최소 16GB RAM (Whisper Large 모델 실행용)
-- 권장: NVIDIA GPU (CUDA 지원)
 
-### GPU 서버 구성
-시스템은 GPU 가속을 위한 전용 서버를 제공합니다:
+### 설치 및 실행
 
-#### Whisper STT 서버
-- **모델**: Whisper Large-v3 (GPU 가속)
-- **포트**: 8082
-- **헬스체크**: `curl http://localhost:8082/health`
-- **폴백**: GPU 실패 시 OpenAI Whisper API 자동 사용
-
-#### Embedding 서버
-- **모델**: BGE-M3 (1024차원, GPU 가속)
-- **포트**: 8083
-- **헬스체크**: `curl http://localhost:8083/health`
-- **폴백**: GPU 실패 시 OpenAI Embeddings API 자동 사용
-
-### 1단계: 환경 설정
-
+1. **환경 설정**
 ```bash
-# 저장소 복제
-git clone <repository-url>
-cd youtube_agent
-
-# 환경 변수 설정
 cp .env.example .env
-
-# .env 파일 편집 (OpenAI API Key 설정 필수)
-nano .env
+# .env 파일에서 OPENAI_API_KEY 설정
 ```
 
-### 2단계: 서비스 시작
-
+2. **서비스 시작**
 ```bash
-# Docker 이미지 빌드 및 서비스 시작
-make build
-make up
-
-# 또는 docker-compose 직접 사용
 docker-compose up -d
-
-# 서비스 상태 확인
-make ps
 ```
 
-### 3단계: 서비스 접속
+3. **접속 URL**
+- 채팅 인터페이스: http://localhost:3000
+- API 문서: http://localhost:8000/docs
+- 관리 대시보드: http://localhost:8090
+- 모니터링: http://localhost:8081
 
-- **관리 대시보드**: http://localhost:8090 (NEW! 🎯)
-- **채팅 인터페이스**: http://localhost:3000
-- **API 문서 (Swagger)**: http://localhost:8000/docs
-- **Qdrant Dashboard**: http://localhost:6333/dashboard
-
-## 🏗️ 아키텍처
+## 🏗️ 시스템 아키텍처
 
 ```mermaid
-graph TB
-    subgraph "데이터 수집 계층"
-        YT[YouTube API] --> DC[Data Collector]
-    end
+graph LR
+    A[YouTube] --> B[Data Collector]
+    B --> C[PostgreSQL]
+    C --> D[STT Workers]
+    D --> E[Vectorize Workers]
+    E --> F[Qdrant]
+    F --> G[RAG Agent]
+    G --> H[OpenWebUI]
 
-    subgraph "데이터 처리 계층"
-        DC --> DP[Data Processor]
-        DP --> W[Whisper STT]
-        DP --> E[OpenAI Embeddings]
-    end
-
-    subgraph "저장 계층"
-        E --> Q[Qdrant Vector DB]
-        DP --> PG[PostgreSQL]
-        DC --> R[Redis Queue]
-    end
-
-    subgraph "서비스 계층"
-        AG[Agent Service] --> Q
-        AG --> PG
-        UI[OpenWebUI] --> AG
-    end
-
-    subgraph "사용자 인터페이스"
-        U[User] --> UI
-    end
+    I[Whisper GPU] --> D
+    J[OpenAI API] --> D
+    K[Embedding Server] --> E
 ```
 
-## 📦 서비스 구성
+### 핵심 컴포넌트
 
-### 데이터 수집 서비스 (Data Collector)
-- YouTube 채널 모니터링 및 신규 콘텐츠 감지
-- 메타데이터 수집 및 저장
-- 처리 작업 큐 관리
+| 서비스 | 포트 | 설명 |
+|--------|------|------|
+| OpenWebUI | 3000 | 채팅 인터페이스 |
+| RAG Agent | 8000 | 질의응답 API + Swagger UI |
+| Admin Dashboard | 8090 | 채널 및 시스템 관리 |
+| Monitoring | 8081 | 처리 상태 모니터링 |
+| Whisper Server | 8082 | GPU 기반 STT 서버 |
+| Embedding Server | 8083 | BGE-M3 임베딩 서버 |
+| STT Cost API | 8084 | 비용 관리 및 승인 |
+| Qdrant | 6333 | 벡터 데이터베이스 |
+| PostgreSQL | 5432 | 메타데이터 저장소 |
+| Redis | 6379 | 캐시 및 작업 큐 |
 
-### 데이터 처리 서비스 (Data Processor)
-- **STT 처리**: Whisper Large 모델을 통한 음성-텍스트 변환
-- **텍스트 청킹**: 문장 단위 의미 청킹 (300-800자)
-- **다층 벡터화**:
-  - Video Summary: 전체 영상 요약 (OpenAI GPT-3.5)
-  - Full Transcript: 전체 자막 텍스트
-  - Paragraph Chunks: 문단 단위 (500자 또는 30초)
-  - Semantic Chunks: 의미 단위 청킹
-- **벡터 생성**: BGE-M3 임베딩 서버 (1024차원)
-- **중복 제거**: 반복 텍스트 및 할루시네이션 제거
+## 📝 사용법
 
-### 에이전트 서비스 (Agent Service)
-- **다층 검색**: 요약, 문단, 청크 레벨 동시 검색
-- **통합 임베딩**: BGE-M3 모델 사용으로 일관된 검색
-- **생성**: GPT-4를 통한 답변 생성
-- **개선**: 검색 결과 재평가 및 답변 최적화
-- **API**: OpenAI 호환 REST API 제공
-
-### UI 서비스 (OpenWebUI)
-- 웹 기반 채팅 인터페이스
-- 대화 히스토리 관리
-- 모델 선택 및 파라미터 조정
-
-### 관리 대시보드 서비스 (Admin Dashboard)
-- **통합 관리 인터페이스**: 시스템 전체 관리를 위한 웹 UI
-- **채널 관리**: 웹 UI를 통한 YouTube 채널 추가/수정/삭제
-- **모니터링 통합**: 실시간 처리 현황 및 시스템 상태 확인
-- **API 테스트**: 내장된 Swagger UI를 통한 API 테스트
-
-## 🛠️ 사용법
-
-### YouTube 채널 추가
-
-#### 방법 1: 관리 대시보드 사용 (권장) 🎯
-1. 관리 대시보드 접속: http://localhost:8090/channels
-2. "새 채널 추가" 버튼 클릭 또는 폼 작성
-3. YouTube 채널 정보 입력:
-   - 채널명: 예) 슈카월드
-   - URL: 예) https://www.youtube.com/@syukaworld
-   - 카테고리, 설명 등 선택사항 입력
-4. "추가" 버튼 클릭
-
-#### 방법 2: API 사용
-```bash
-curl -X POST "http://localhost:8000/api/channels" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "슈카월드",
-    "url": "https://www.youtube.com/@syukaworld",
-    "platform": "youtube",
-    "language": "ko"
-  }'
-```
-
-#### 방법 3: 코드 수정 (레거시)
+### 채널 추가
 ```python
-# services/data-collector/app.py에서 channels 배열 수정
-channels = [
-    "https://www.youtube.com/@syukaworld",
-    "https://www.youtube.com/@yourChannel",
-]
+# Admin Dashboard (http://localhost:8090) 또는 API 사용
+POST /api/channels
+{
+  "url": "https://www.youtube.com/@channelname",
+  "name": "Channel Name"
+}
 ```
 
-### API 사용 예제
-
-#### 콘텐츠 검색
+### 질문하기
 ```bash
-curl -X POST "http://localhost:8000/search" \
+# OpenWebUI (http://localhost:3000) 또는 API 사용
+curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
-  -d '{
-    "query": "코스피 3395",
-    "limit": 5
-  }'
+  -d '{"query": "코스피 전망에 대해 알려줘"}'
 ```
 
-#### 질의응답
-```bash
-curl -X POST "http://localhost:8000/v1/chat/completions" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "youtube-agent",
-    "messages": [
-      {"role": "user", "content": "슈카월드에서 코스피 얘기한 내용 알려줘"}
-    ]
-  }'
+### OpenAI 호환 API
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="dummy-key"
+)
+
+response = client.chat.completions.create(
+    model="youtube-agent",
+    messages=[{"role": "user", "content": "질문내용"}]
+)
 ```
 
-### 모니터링
+## 📊 데이터 처리 파이프라인
 
+1. **수집**: YouTube 채널 → 비디오 메타데이터 → 오디오 다운로드
+2. **STT**: Whisper GPU (우선) → OpenAI API (폴백) → 텍스트 + 타임스탬프
+3. **정제**: 반복 텍스트 제거 → 할루시네이션 방지 → 오염 텍스트 제거
+4. **벡터화**: 문장 청킹 (300-800자) → Summary 생성 → BGE-M3 임베딩
+5. **저장**: Qdrant 벡터 DB (summaries + content 컬렉션)
+6. **검색**: 의미 기반 검색 → 점수 필터링 (0.55) → 컨텍스트 생성
+7. **응답**: LangGraph RAG → YouTube 타임스탬프 링크 포함
+
+## 🔧 설정
+
+### 환경 변수 (.env)
 ```bash
-# 실시간 로그 확인
-make logs
+# 필수
+OPENAI_API_KEY=sk-...
 
-# 특정 서비스 로그
-make logs-processor
-make logs-agent
+# STT 비용 관리 (선택)
+STT_DAILY_COST_LIMIT=10.0      # 일일 한도 (USD)
+STT_MONTHLY_COST_LIMIT=100.0   # 월별 한도 (USD)
+STT_SINGLE_VIDEO_LIMIT=2.0     # 영상당 한도 (USD)
+STT_AUTO_APPROVE_THRESHOLD=0.10 # 자동 승인 임계값 (USD)
+```
 
+### Docker 컨테이너 (18개)
+```bash
+# 데이터베이스
+- postgres           # 메타데이터 저장
+- redis             # 캐시 및 작업 큐
+- qdrant            # 벡터 데이터베이스
+
+# 처리 서버
+- whisper-server    # Whisper Large-v3 GPU
+- embedding-server  # BGE-M3 임베딩
+- stt-cost-api     # 비용 관리
+
+# 워커
+- data-collector    # YouTube 수집
+- data-processor   # 오케스트레이터
+- stt-worker-1~3   # STT 처리
+- vectorize-worker-1~3 # 벡터화
+
+# 서비스
+- agent-service    # RAG 에이전트
+- admin-dashboard  # 관리 UI
+- monitoring-dashboard # 모니터링
+- ui-service      # OpenWebUI
+```
+
+## 📈 모니터링 및 관리
+
+### 시스템 상태 확인
+```bash
 # 서비스 상태
-make stats
+docker-compose ps
 
-# 데이터베이스 접속
-make db-shell
+# 처리 대기열
+curl http://localhost:8081/api/queue
 
-# 데이터 정합성 체크
-make check-data
+# 비용 현황
+curl http://localhost:8084/api/cost-summary
+
+# 벡터 DB 상태
+curl http://localhost:6333/collections
 ```
 
-## 📊 운영 관리
-
-### 데이터 정합성 관리
-
+### 데이터 정리
 ```bash
-# PostgreSQL과 Qdrant 간 데이터 정합성 확인
-make check-data
+# 오염 텍스트 제거
+docker exec youtube_data_processor python /app/scripts/clean_initial_prompt.py
 
-# 문제 발견 시 자동 수정
-make check-data-fix
-
-# 멈춘 작업 재설정
-make reset-stuck-jobs
-
-# Qdrant의 고아 벡터 정리
-make clean-orphans
-```
-
-### 데이터 초기화
-
-```bash
-# 소프트 리셋 (채널 정보 보존, 콘텐츠만 삭제)
-# ⚠️ 주의: 모든 콘텐츠와 처리 데이터가 삭제됩니다
-make reset-soft
-
-# 하드 리셋 (모든 데이터 완전 삭제)
-# ⛔ 경고: 채널 정보를 포함한 모든 데이터가 영구 삭제됩니다!
-make reset-hard
-```
-
-### 데이터베이스 백업
-
-```bash
-# 백업 생성
-make db-backup
-
-# 백업 복원
-make db-restore FILE=backup_20250918.sql
-```
-
-### 서비스 재시작
-
-```bash
-# 특정 서비스 재시작
-docker restart youtube_agent_service
-
-# 전체 서비스 재시작
-make restart
-```
-
-### 서비스 라이프사이클 관리
-
-```bash
-# 일시 정지 (메모리 유지, CPU 사용 중단)
-make pause
-make unpause
-
-# 정지/시작 (컨테이너 유지, 프로세스 종료)
-make stop
-make start
-
-# 안전한 정지/시작 (데이터 무결성 보장)
-make safe-stop    # 처리 중인 작업 완료 대기
-make safe-start   # stuck 작업 정리 후 시작
-
-# 완전 종료/시작 (컨테이너 재생성)
-make down
-make up
-```
-
-### 문제 해결
-
-```bash
-# 헬스체크
-make test-health
-
-# 처리 작업 상태 확인
-make check-jobs
-
-# 데이터 정합성 문제 해결
-make check-data-fix
-
-# 멈춘 작업 초기화
-make reset-stuck-jobs
-
-# 처리 대기 작업 직접 확인
+# 작업 상태 확인
 docker exec youtube_data_processor python -c "
-from shared.models.database import ProcessingJob, get_database_url
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
-engine = create_engine(get_database_url())
-SessionLocal = sessionmaker(bind=engine)
-db = SessionLocal()
-
-pending = db.query(ProcessingJob).filter_by(status='pending').count()
-processing = db.query(ProcessingJob).filter_by(status='processing').count()
-
-print(f'대기 중: {pending}개')
-print(f'처리 중: {processing}개')
+from shared.models.database import ProcessingJob
+# ... 작업 상태 조회
 "
 ```
 
-#### 일반적인 문제 및 해결 방법
+## 🐛 문제 해결
 
-**데이터 정합성 오류**
+### 일반적인 문제
+
+1. **OpenWebUI 응답 없음**
+   - 해결: 타임아웃이 120초로 설정되어 있으므로 대기
+   - LLM 응답 생성에 10-15초 소요 정상
+
+2. **STT 처리 실패**
+   - GPU 서버 상태 확인: `curl http://localhost:8082/health`
+   - OpenAI API 키 확인: `.env` 파일
+   - 비용 한도 확인: http://localhost:8084
+
+3. **검색 결과 부정확**
+   - RAG 점수 임계값 조정 (현재 0.55)
+   - 벡터화 재처리 필요시 강제 재실행
+
+### 로그 확인
 ```bash
-# 정합성 체크 실행
-make check-data
+# 특정 서비스 로그
+docker-compose logs -f agent-service
 
-# 자동 수정 시도
-make check-data-fix
+# STT 워커 로그
+docker-compose logs -f stt-worker-1
 
-# 그래도 문제가 있으면 소프트 리셋
-make reset-soft
+# 전체 로그
+docker-compose logs --tail=100
 ```
 
-**처리 작업이 멈춘 경우**
+## 🎯 현재 시스템 상태
+
+### 데이터 현황 (2025-09-22 기준)
+- **수집 완료**: 10개 YouTube 채널
+- **처리된 트랜스크립트**: 36,208개
+- **벡터 DB**:
+  - youtube_content: 7,448 포인트 (활성)
+  - youtube_summaries: 10 포인트 (활성)
+  - youtube_paragraphs: 5,729 포인트 (레거시)
+  - youtube_full_texts: 10 포인트 (레거시)
+
+### 데이터 품질
+- ✅ 모든 "한국어 팟캐스트" 오염 텍스트 제거 완료
+- ✅ Whisper initial_prompt 제거로 향후 오염 방지
+- ✅ 반복 텍스트 및 할루시네이션 제거 로직 적용
+
+### 성능 지표
+- STT 처리: 실시간 대비 0.3-0.5x
+- 검색 응답: 300-500ms
+- RAG 응답: 10-15초 (OpenAI GPT-4o 사용)
+- 벡터 검색 정확도: 점수 임계값 0.55
+
+## 📚 추가 문서
+
+- [CLAUDE.md](CLAUDE.md) - AI 개발자를 위한 상세 가이드
+- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) - 프로젝트 구조 및 파일 매핑
+- [BACKUP_FILES.md](BACKUP_FILES.md) - 백업 파일 관리
+
+## 🛠️ 개발 명령어
+
+### 빌드 및 배포
 ```bash
-# 멈춘 작업 확인 및 재설정
-make reset-stuck-jobs
+# 전체 재빌드
+docker-compose down
+docker-compose build --no-cache
+docker-compose up -d
 
-# 서비스 재시작
-make restart
+# 특정 서비스만 재시작
+docker-compose restart agent-service
+
+# 안전한 정지 (작업 완료 대기)
+docker-compose stop data-processor
+# ... 모든 작업 완료 확인 후
+docker-compose down
 ```
 
-**벡터 DB와 PostgreSQL 불일치**
+### 데이터베이스 작업
 ```bash
-# 고아 벡터 정리
-make clean-orphans
+# PostgreSQL 접속
+docker exec -it youtube_postgres psql -U youtube_user -d youtube_agent
 
-# 전체 정합성 체크 및 수정
-make check-data-fix
+# 백업
+docker exec youtube_postgres pg_dump -U youtube_user youtube_agent > backup.sql
+
+# 복원
+docker exec -i youtube_postgres psql -U youtube_user youtube_agent < backup.sql
 ```
-
-## 🔧 고급 설정
-
-### GPU 가속 활성화
-
-```yaml
-# docker-compose.yml
-services:
-  whisper-server:
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
-      interval: 30s
-      timeout: 10s
-      start_period: 300s  # GPU 모델 로딩 시간 고려
-
-  embedding-server:
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-```
-
-### 헬스체크 구성
-
-모든 GPU 서버는 curl 기반 헬스체크를 사용합니다:
-
-```dockerfile
-# Dockerfile - curl 설치 필수
-RUN apt-get update && apt-get install -y curl
-```
-
-### 청킹 파라미터 조정
-
-```python
-# services/data-processor/app.py
-CHUNK_CONFIG = {
-    "min_chunk_size": 300,    # 최소 청크 크기
-    "max_chunk_size": 800,    # 최대 청크 크기
-    "min_sentences": 1,       # 최소 문장 수
-    "max_sentences": 3,       # 최대 문장 수
-}
-```
-
-### Whisper 모델 설정
-
-```python
-# src/youtube_agent/stt_processor.py
-whisper_config = {
-    "model_size": "large",           # 모델 크기
-    "language": "ko",                 # 언어 설정
-    "beam_size": 1,                   # 빔 크기 (할루시네이션 방지)
-    "temperature": (0.0, 0.2, 0.4),   # 온도 설정
-}
-```
-
-## 📈 성능 최적화
-
-### 배치 처리 최적화
-- 동시 처리 워커 수 조정: `CELERY_WORKERS` 환경 변수
-- 배치 크기 조정: `BATCH_SIZE` 환경 변수
-
-### 캐싱 전략
-- Redis를 활용한 검색 결과 캐싱
-- Whisper 모델 사전 로딩을 통한 콜드 스타트 방지
-
-### 리소스 관리
-- 컨테이너별 메모리 제한 설정
-- 자동 재시작 정책 구성
-
-## 📝 주요 개선 사항
-
-### v1.2.0 (2025.09.19)
-- ✅ 다층 지식 구조 구현 (요약, 전문, 문단, 청크)
-- ✅ BGE-M3 임베딩 통합 (1024차원)
-- ✅ 임베딩 모델 일관성 문제 해결
-- ✅ 검색 정확도 대폭 향상 (0.04 → 0.60+)
-- ✅ GPU 서버 헬스체크 개선
-- ✅ 실시간 모니터링 대시보드 정확도 개선
-
-### v1.1.0 (2025.09.16)
-- ✅ Whisper Large 모델 통합
-- ✅ 반복 텍스트 및 할루시네이션 제거
-- ✅ 문장 기반 의미 청킹 구현
-- ✅ YouTube 타임스탬프 링크 자동 생성
-- ✅ LangGraph 기반 다단계 RAG 워크플로우
-- ✅ OpenWebUI 통합
-
-### 로드맵
-- [ ] 멀티모달 분석 (비디오 썸네일, 자막)
-- [ ] 실시간 스트리밍 콘텐츠 지원
-- [ ] 주제별 클러스터링 및 트렌드 분석
-- [ ] 다국어 지원 확장
-- [ ] 감정 분석 및 핵심 키워드 추출
 
 ## 🤝 기여하기
 
-1. 이 저장소를 Fork하세요
-2. 기능 브랜치를 생성하세요 (`git checkout -b feature/AmazingFeature`)
-3. 변경사항을 커밋하세요 (`git commit -m 'Add some AmazingFeature'`)
-4. 브랜치에 푸시하세요 (`git push origin feature/AmazingFeature`)
-5. Pull Request를 생성하세요
+이슈 제보 및 PR은 언제나 환영합니다!
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ## 📄 라이선스
 
-이 프로젝트는 MIT 라이선스를 따릅니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+MIT License - 자세한 내용은 [LICENSE](LICENSE) 파일 참조
 
-## 🙏 감사의 말
+## 🙏 감사의 글
 
 - OpenAI Whisper 팀
 - LangChain/LangGraph 커뮤니티
-- Qdrant 벡터 데이터베이스 팀
-- OpenWebUI 프로젝트 기여자들
-
-## 📞 문의
-
-프로젝트 관련 문의사항은 GitHub Issues를 통해 등록해 주세요.
+- Qdrant 벡터 DB 팀
+- OpenWebUI 프로젝트
 
 ---
-**YouTube Content Agent** - RAG 기반 YouTube 콘텐츠 분석 플랫폼
+
+**문의사항**: 이슈 탭을 이용해주세요
+**최종 업데이트**: 2025-09-22

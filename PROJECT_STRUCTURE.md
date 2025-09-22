@@ -45,11 +45,16 @@ youtube_agent/
 
 ### STT 처리
 - **현재**: `services/data-processor/stt_worker.py`
-- **이전**: `improved_stt_worker_with_cost.py` → 백업으로 이동
+  - GPU 서버 (Whisper Large-v3) 우선 사용
+  - OpenAI API 폴백 (비용 관리 포함)
+  - CPU 폴백 완전 제거
 
 ### 벡터화 처리
 - **현재**: `services/data-processor/vectorize_worker.py`
-- **이전**: `improved_vectorize_worker.py` → 백업으로 이동
+  - Summary 생성 기능 통합 (OpenAI API)
+  - 의미 기반 청킹 (300-800자)
+  - YouTube 타임스탬프 URL 생성
+  - BGE-M3 임베딩 서버 사용 (1024차원)
 
 ### Docker 설정
 - **현재**: `docker-compose.yml`
@@ -86,17 +91,42 @@ WHISPER_SERVER_URL=http://whisper-server:8080
 
 1. **수집**: YouTube URL → data-collector → PostgreSQL
 2. **STT**: 오디오 파일 → stt_worker → 텍스트 + 타임스탬프
+   - Whisper GPU 서버 (8082) → OpenAI API 폴백
+   - 비용 관리 API (8084)로 승인 처리
 3. **벡터화**: 텍스트 → vectorize_worker → Qdrant
+   - Summary 생성: OpenAI GPT-4o-mini
+   - 임베딩: BGE-M3 서버 (8083)
+   - 저장: youtube_summaries + youtube_content
 4. **검색**: 질의 → agent-service → RAG 응답
+   - LangGraph 워크플로우
+   - 점수 임계값: 0.55
 
 ## 포트 매핑
 
-- 8000: RAG Agent API
-- 8090: Admin Dashboard
-- 6333: Qdrant Vector DB
+- 3000: OpenWebUI (채팅 인터페이스)
 - 5432: PostgreSQL
+- 6333: Qdrant Vector DB
 - 6379: Redis
-- 3000: OpenWebUI (UI Service)
+- 8000: RAG Agent API + Swagger UI
+- 8081: Monitoring Dashboard
+- 8082: Whisper Server (GPU)
+- 8083: Embedding Server (BGE-M3)
+- 8084: STT Cost Management API
+- 8090: Admin Dashboard
+
+## 현재 시스템 상태
+
+### 데이터 현황
+- **PostgreSQL**: 36,208개 트랜스크립트
+- **Qdrant 컬렉션**:
+  - youtube_content: 7,448 포인트 (활발히 사용)
+  - youtube_summaries: 10 포인트 (활발히 사용)
+  - youtube_paragraphs: 5,729 포인트 (레거시)
+  - youtube_full_texts: 10 포인트 (레거시)
+
+### 데이터 품질
+- ✅ 모든 "한국어 팟캐스트" 오염 텍스트 제거 완료
+- ✅ Whisper initial_prompt 제거로 향후 오염 방지
 
 ---
 **업데이트**: 2025-09-22
