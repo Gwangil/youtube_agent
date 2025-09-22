@@ -1,0 +1,127 @@
+version: '3.8'
+
+# 이 파일은 최적화된 Docker 이미지를 사용하는 버전입니다
+# models 디렉토리를 볼륨으로 마운트하여 이미지 크기를 줄입니다
+
+services:
+  # Whisper STT Server (GPU-enabled) - 모델을 볼륨으로 마운트
+  whisper-server:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile.optimized
+    container_name: youtube_whisper_server
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - WHISPER_MODEL_DIR=/app/models/whisper
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 300s
+      retries: 10
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - ./models:/app/models  # 모델을 볼륨으로 마운트
+      - /tmp:/tmp
+    command: sh -c "python /app/services/data-processor/init_whisper_cache.py && python /app/services/data-processor/whisper_server.py"
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Embedding Server - 모델을 볼륨으로 마운트
+  embedding-server:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile.optimized
+    container_name: youtube_embedding_server
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_PORT=8083
+      - CUDA_VISIBLE_DEVICES=0
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 10
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./models:/app/models  # 모델을 볼륨으로 마운트
+    command: python /app/services/data-processor/embedding_server.py
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Data Processing Service
+  data-processor:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile.optimized
+    container_name: youtube_data_processor
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WHISPER_SERVER_URL=http://whisper-server:8082
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./models:/app/models  # 모델을 볼륨으로 마운트
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+      - whisper-server
+    restart: unless-stopped
+
+  # STT Workers - 모델을 볼륨으로 마운트
+  stt-worker-1:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile.optimized
+    container_name: youtube_stt_worker_1
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - WHISPER_SERVER_URL=http://whisper-server:8082
+      - STT_WORKER_ID=0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - ./models:/app/models  # 모델을 볼륨으로 마운트
+      - /tmp:/tmp
+    command: python /app/services/data-processor/improved_stt_worker_with_cost.py
+    depends_on:
+      - postgres
+      - whisper-server
+      - stt-cost-api
+      - redis
+    restart: unless-stopped
+
+  # 나머지 서비스들도 동일한 패턴으로...

@@ -1,0 +1,83 @@
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+dist/
+build/
+
+# Models - Don't include in image, mount as volume
+models/whisper/*.pt
+models/whisper/*.pth
+models/embeddings/*.bin
+models/embeddings/*.safetensors
+models/models--*
+models/torch/
+
+# Data
+data/
+*.mp4
+*.mp3
+*.wav
+*.m4a
+*.webm
+
+# Logs
+*.log
+logs/
+
+# Git
+.git
+.gitignore
+
+# Docker
+.dockerignore
+Dockerfile*
+docker-compose*.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+*.md
+docs/
+LICENSE
+
+# Testing
+test/
+tests/
+pytest_cache/
+.coverage
+.pytest_cache/
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Backup
+*.backup
+*.bak
+backup/
+backups/
