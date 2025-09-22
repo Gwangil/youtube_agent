@@ -297,7 +297,7 @@ class WhisperServer:
                 "logprob_threshold": -0.8,  # 낮은 품질 텍스트 필터링 (강화)
                 "no_speech_threshold": 0.7,  # 무음 구간 감지 강화
                 "condition_on_previous_text": False,
-                "initial_prompt": "다음은 한국어 팟캐스트입니다." if language == "ko" else None
+                "initial_prompt": None  # 실제 텍스트에 포함되는 문제로 제거
             }
 
             raw_result = self.model.transcribe(audio_path, **options)
