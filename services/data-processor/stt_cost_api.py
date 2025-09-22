@@ -6,6 +6,7 @@ STT 비용 관리 웹 API
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime

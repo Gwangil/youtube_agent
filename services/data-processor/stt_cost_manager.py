@@ -7,7 +7,7 @@ OpenAI Whisper API 사용 시 비용 추적 및 제한
 import os
 import json
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker

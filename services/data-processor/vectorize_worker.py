@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-벡터화 전용 워커
-STT 완료된 콘텐츠를 즉시 벡터화하여 지식베이스에 저장
+개선된 벡터화 워커
+임베딩 서버와 통신하여 안정적인 벡터화 처리
 """
 
 import os
 import sys
 import time
 import hashlib
+import uuid
+import requests
 from datetime import datetime
 from typing import List, Dict
 from sqlalchemy.orm import sessionmaker
@@ -18,7 +20,7 @@ import re
 import redis
 import json
 import pickle
-from shared.utils.embeddings import get_embeddings
+from openai import OpenAI
 
 # Add project root to path
 sys.path.append('/app')
@@ -31,38 +33,60 @@ from shared.models.database import (
 from shared.utils.retry import retry, robust_retry
 
 
-class VectorizeWorker:
-    """벡터화 전용 워커"""
+class ImprovedVectorizeWorker:
+    """개선된 벡터화 워커 - 임베딩 서버 클라이언트"""
 
     def __init__(self):
         self.worker_id = int(os.getenv('VECTORIZE_WORKER_ID', '0'))
         self.engine = create_engine(get_database_url())
         self.SessionLocal = sessionmaker(bind=self.engine)
 
-        # Qdrant 연결
+        # Qdrant 연결 (타임아웃 증가)
         qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
-        self.qdrant_client = QdrantClient(url=qdrant_url)
+        self.qdrant_client = QdrantClient(url=qdrant_url, timeout=60)
 
-        # 하이브리드 임베딩 초기화 (GPU/CPU 자동 선택)
-        self.embeddings = get_embeddings()
-        model_info = self.embeddings.get_model_info()
+        # 임베딩 서버 URL
+        self.embedding_server_url = os.getenv('EMBEDDING_SERVER_URL', 'http://localhost:8083')
 
         # Redis 캐시 연결
         redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
         self.redis_client = redis.from_url(redis_url, decode_responses=False)
         self.cache_ttl = 3600 * 24 * 7  # 7일간 캐시 유지
 
-        print(f"🚀 벡터화 전용 워커 #{self.worker_id} 초기화 완료")
-        print(f"  🤖 임베딩 모델: {model_info['model_name']} ({model_info['model_type']})")
-        print(f"  💾 디바이스: {model_info['device']}")
+        print(f"🚀 개선된 벡터화 워커 #{self.worker_id} 초기화 완료")
+        print(f"  🎯 임베딩 서버: {self.embedding_server_url}")
+        print(f"  💾 Qdrant: {qdrant_url}")
         print(f"  📦 Redis 캐시 연결됨")
+
+        # 임베딩 서버 연결 확인
+        self._check_embedding_server()
+
+    def _check_embedding_server(self):
+        """임베딩 서버 연결 상태 확인"""
+        try:
+            response = requests.get(f"{self.embedding_server_url}/health", timeout=5)
+            if response.status_code == 200:
+                info = response.json()
+                print(f"  ✅ 임베딩 서버 연결됨")
+                print(f"    - 모델: {info.get('model', 'unknown')}")
+                print(f"    - 타입: {info.get('type', 'unknown')}")
+                print(f"    - 차원: {info.get('dimension', 'unknown')}")
+                print(f"    - 디바이스: {info.get('device', 'unknown')}")
+                self.embedding_dimension = info.get('dimension', 1024)
+            else:
+                print(f"  ⚠️ 임베딩 서버 응답 오류: {response.status_code}")
+                self.embedding_dimension = 1024  # 기본값
+        except Exception as e:
+            print(f"  ❌ 임베딩 서버 연결 실패: {e}")
+            print(f"  💔 임베딩 서버 없이는 작동할 수 없습니다!")
+            self.embedding_dimension = 1024  # 기본값
 
     def get_db(self):
         """데이터베이스 세션 생성"""
         return self.SessionLocal()
 
     def _create_semantic_chunks(self, transcripts: List[Transcript]) -> List[Dict]:
-        """문장 기반 의미 청킹 (강화된 중복 제거)"""
+        """문장 기반 의미 청킹 (강화된 중복 제거 및 시간 검증)"""
         chunks = []
         current_chunk = {
             'text': '',
@@ -74,9 +98,18 @@ class VectorizeWorker:
         # 텍스트 중복 감지를 위한 해시 세트
         seen_texts = set()
 
+        # 시간 오류 통계
+        time_errors = 0
+
         for transcript in transcripts:
             text = transcript.text.strip()
             if not text or len(text) < 5:  # 너무 짧은 텍스트 제외
+                continue
+
+            # 시간 검증 - start_time이 end_time보다 큰 경우 스킵
+            if transcript.start_time > transcript.end_time:
+                time_errors += 1
+                print(f"  ⚠️ 시간 오류 감지: start={transcript.start_time:.2f}, end={transcript.end_time:.2f} - 스킵")
                 continue
 
             # 중복 텍스트 확인
@@ -101,15 +134,18 @@ class VectorizeWorker:
 
                 current_chunk['sentences'].append(cleaned_sentence)
                 current_chunk['text'] += cleaned_sentence + '. '
-                current_chunk['end_time'] = transcript.end_time
+                current_chunk['end_time'] = max(transcript.end_time, current_chunk['start_time'] + 0.1)  # 최소 0.1초 보장
 
                 # 청크 크기 제한 (1-3 문장 또는 200-600자로 조정)
                 chunk_length = len(current_chunk['text'])
                 sentence_count = len(current_chunk['sentences'])
 
                 if sentence_count >= 2 or chunk_length >= 600:
-                    # 의미 있는 청크만 추가
+                    # 의미 있는 청크만 추가 (시간 검증 포함)
                     if chunk_length > 10 and sentence_count > 0:
+                        # 시간 범위 최종 검증
+                        if current_chunk['end_time'] < current_chunk['start_time']:
+                            current_chunk['end_time'] = current_chunk['start_time'] + 1.0  # 기본 1초
                         chunks.append(current_chunk.copy())
                     current_chunk = {
                         'text': '',
@@ -120,7 +156,13 @@ class VectorizeWorker:
 
         # 마지막 청크 추가
         if current_chunk['sentences'] and len(current_chunk['text']) > 10:
+            # 시간 범위 최종 검증
+            if current_chunk['end_time'] < current_chunk['start_time']:
+                current_chunk['end_time'] = current_chunk['start_time'] + 1.0
             chunks.append(current_chunk)
+
+        if time_errors > 0:
+            print(f"  ⚠️ 시간 오류로 스킵된 트랜스크립트: {time_errors}개")
 
         print(f"  📊 청킹 통계: {len(transcripts)}개 트랜스크립트 -> {len(chunks)}개 청크")
         return chunks
@@ -162,6 +204,45 @@ class VectorizeWorker:
 
         return ' '.join(cleaned_words)
 
+    def _generate_summary(self, title: str, transcripts: List[Transcript]) -> str:
+        """OpenAI API를 사용하여 영상 요약 생성"""
+        openai_api_key = os.getenv('OPENAI_API_KEY')
+        if not openai_api_key:
+            # API 키가 없으면 간단한 요약 생성
+            full_text = ' '.join([t.text for t in transcripts[:50]])  # 처음 50개 세그먼트만
+            return f"제목: {title}\n내용: {full_text[:1000]}..."
+
+        try:
+            client = OpenAI(api_key=openai_api_key)
+
+            # 전체 텍스트 준비 (최대 8000자로 제한)
+            full_text = ' '.join([t.text for t in transcripts])[:8000]
+
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "당신은 YouTube 동영상 내용을 요약하는 전문가입니다. 핵심 내용을 간결하고 명확하게 요약해주세요."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"다음 YouTube 동영상의 내용을 200-300자로 요약해주세요:\n\n제목: {title}\n\n내용:\n{full_text}"
+                    }
+                ],
+                temperature=0.3,
+                max_tokens=500
+            )
+
+            summary = response.choices[0].message.content.strip()
+            return summary
+
+        except Exception as e:
+            print(f"  ⚠️ OpenAI 요약 생성 실패: {e}")
+            # 폴백: 간단한 요약 생성
+            full_text = ' '.join([t.text for t in transcripts[:50]])
+            return f"제목: {title}\n내용: {full_text[:1000]}..."
+
     def _create_timestamp_url(self, original_url: str, start_time_seconds: float) -> str:
         """YouTube 타임스탬프 URL 생성"""
         try:
@@ -187,12 +268,47 @@ class VectorizeWorker:
         except Exception:
             return original_url
 
+    @retry(max_attempts=3, delay=2.0, backoff=2.0)
+    def _get_embeddings_from_server(self, texts: List[str]) -> List[List[float]]:
+        """임베딩 서버에서 벡터 생성 (재시도 포함)"""
+        try:
+            # 헬스 체크
+            health_response = requests.get(f"{self.embedding_server_url}/health", timeout=10)
+            if health_response.status_code != 200:
+                raise requests.exceptions.ConnectionError("Embedding server not ready")
+
+            # 임베딩 요청
+            response = requests.post(
+                f"{self.embedding_server_url}/embed",
+                json={"texts": texts},
+                timeout=60  # 1분 타임아웃
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                embeddings = result['embeddings']
+                dimension = result['dimension']
+                print(f"  ✅ 임베딩 서버 처리 완료: {len(embeddings)}개, {dimension}차원")
+                return embeddings
+            else:
+                raise Exception(f"임베딩 서버 오류: {response.status_code}")
+
+        except Exception as e:
+            print(f"  ❌ 임베딩 서버 요청 실패: {e}")
+            raise
+
     def process_vectorization(self, job: ProcessingJob):
         """벡터화 처리"""
-        print(f"🔧 벡터화 작업 처리: Job {job.id}")
+        print(f"🔧 [Worker {self.worker_id}] 벡터화 작업 처리: Job {job.id}")
 
         db = self.get_db()
         try:
+            # 현재 세션에서 job 다시 조회
+            job = db.query(ProcessingJob).filter(ProcessingJob.id == job.id).first()
+            if not job or job.status != 'pending':
+                print(f"  ⚠️ [Worker {self.worker_id}] 작업 {job.id}가 이미 처리됨 또는 없음")
+                return
+
             # 작업 상태 업데이트
             job.status = 'processing'
             job.started_at = datetime.utcnow()
@@ -210,11 +326,59 @@ class VectorizeWorker:
             if not transcripts:
                 raise Exception("트랜스크립트가 없습니다")
 
-            print(f"  📝 {len(transcripts)}개 트랜스크립트 세그먼트 처리 중...")
+            print(f"  📝 [Worker {self.worker_id}] {len(transcripts)}개 트랜스크립트 세그먼트 처리 중...")
 
-            # 문장 기반 청킹 수행
+            # 1. Summary 생성 및 저장
+            print(f"  📋 [Worker {self.worker_id}] Summary 생성 중...")
+            summary_text = self._generate_summary(content.title, transcripts)
+
+            # Summary 임베딩 생성
+            summary_embedding = self._get_embeddings_from_server([summary_text])[0]
+
+            # Summary 포인트 생성
+            summary_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"summary_{content.id}"))
+            summary_point = PointStruct(
+                id=summary_id,
+                vector=summary_embedding,
+                payload={
+                    'content_id': content.id,
+                    'type': 'summary',
+                    'search_type': 'summary',  # RAG 에이전트용 타입
+                    'summary': summary_text,    # summary 필드
+                    'text': summary_text,       # 호환성을 위해 text 필드도 포함
+                    'title': content.title,
+                    'url': content.url,
+                    'channel_name': content.channel.name if content.channel else 'Unknown',
+                    'platform': 'youtube',
+                    'publish_date': content.publish_date.isoformat() if content.publish_date else None,
+                }
+            )
+
+            # youtube_summaries 컬렉션 생성 확인
+            try:
+                collections = self.qdrant_client.get_collections()
+                collection_names = [c.name for c in collections.collections]
+
+                if 'youtube_summaries' not in collection_names:
+                    from qdrant_client.models import Distance, VectorParams
+                    self.qdrant_client.create_collection(
+                        collection_name='youtube_summaries',
+                        vectors_config=VectorParams(size=self.embedding_dimension, distance=Distance.COSINE)
+                    )
+                    print(f"  ✨ youtube_summaries 컬렉션 생성됨")
+
+                # Summary 저장
+                self.qdrant_client.upsert(
+                    collection_name='youtube_summaries',
+                    points=[summary_point]
+                )
+                print(f"  ✅ Summary 저장 완료")
+            except Exception as e:
+                print(f"  ⚠️ Summary 저장 실패: {e}")
+
+            # 2. 문장 기반 청킹 수행
             semantic_chunks = self._create_semantic_chunks(transcripts)
-            print(f"  🧩 {len(semantic_chunks)}개 의미 청크 생성")
+            print(f"  🧩 [Worker {self.worker_id}] {len(semantic_chunks)}개 의미 청크 생성")
 
             # 배치 처리를 위한 텍스트 수집
             batch_size = 100  # 한 번에 처리할 임베딩 수
@@ -234,8 +398,8 @@ class VectorizeWorker:
                 text_indices = []  # 원본 배치에서의 인덱스
 
                 for idx, text in enumerate(batch_texts):
-                    # 캐시 키 생성 (텍스트 해시)
-                    cache_key = f"embedding:{hashlib.md5(text.encode()).hexdigest()}"
+                    # 캐시 키 생성 (텍스트 해시 + 차원)
+                    cache_key = f"embedding:1024:{hashlib.md5(text.encode()).hexdigest()}"
 
                     # Redis에서 캐시된 임베딩 확인
                     cached_embedding = self.redis_client.get(cache_key)
@@ -252,37 +416,34 @@ class VectorizeWorker:
 
                 # 캐시되지 않은 텍스트들에 대한 배치 임베딩 생성
                 if texts_to_embed:
-                    print(f"  🔄 배치 임베딩 생성 중... (신규: {len(texts_to_embed)}개, 캐시: {len(batch_texts) - len(texts_to_embed)}개)")
+                    print(f"  🔄 [Worker {self.worker_id}] 임베딩 서버 요청 중... (신규: {len(texts_to_embed)}개, 캐시: {len(batch_texts) - len(texts_to_embed)}개)")
 
-                    # 임베딩 생성 (재시도 포함)
-                    @robust_retry()
-                    def generate_embeddings():
-                        return self.embeddings.embed_documents(texts_to_embed)
-
-                    new_embeddings = generate_embeddings()
+                    # 임베딩 서버에서 생성
+                    new_embeddings = self._get_embeddings_from_server(texts_to_embed)
 
                     # 생성된 임베딩을 올바른 위치에 배치하고 캐시에 저장
                     for text, embedding, original_idx in zip(texts_to_embed, new_embeddings, text_indices):
                         batch_embeddings[original_idx] = embedding
 
-                        # Redis에 캐시 저장
-                        cache_key = f"embedding:{hashlib.md5(text.encode()).hexdigest()}"
+                        # Redis에 캐시 저장 (차원 정보 포함)
+                        cache_key = f"embedding:1024:{hashlib.md5(text.encode()).hexdigest()}"
                         self.redis_client.setex(
                             cache_key,
                             self.cache_ttl,
                             pickle.dumps(embedding)
                         )
                 else:
-                    print(f"  ✅ 모든 임베딩이 캐시에서 로드됨 ({len(batch_texts)}개)")
+                    print(f"  ✅ [Worker {self.worker_id}] 모든 임베딩이 캐시에서 로드됨 ({len(batch_texts)}개)")
 
                 # 각 청크에 대한 포인트 생성
                 for idx, (chunk_data, embedding) in enumerate(zip(batch_chunks, batch_embeddings)):
                     i = batch_start + idx
 
-                    # 청크 ID 생성
-                    chunk_id = hashlib.md5(
-                        f"{content.id}_{i}_{chunk_data['text'][:50]}".encode()
-                    ).hexdigest()
+                    # 청크 ID 생성 (UUID 형식으로)
+                    chunk_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_DNS,
+                        f"{content.id}_{i}_{chunk_data['text'][:50]}"
+                    ))
 
                     # 타임스탬프 URL 생성
                     timestamp_url = self._create_timestamp_url(content.url, chunk_data['start_time'])
@@ -309,38 +470,55 @@ class VectorizeWorker:
                     )
                     points.append(point)
 
-            # Qdrant에 벡터 데이터 저장 (재시도 포함)
+            # Qdrant 컬렉션 확인 및 생성
+            self._ensure_qdrant_collection()
+
+            # Qdrant에 벡터 데이터 저장 (작은 배치로 나누어서)
             @retry(max_attempts=3, delay=1.0)
-            def upsert_to_qdrant():
+            def upsert_batch_to_qdrant(batch_points):
                 self.qdrant_client.upsert(
                     collection_name="youtube_content",
-                    points=points
+                    points=batch_points
                 )
 
-            upsert_to_qdrant()
+            # 50개씩 배치로 나누어 업서트
+            batch_size = 50
+            for i in range(0, len(points), batch_size):
+                batch = points[i:i+batch_size]
+                print(f"  📤 [Worker {self.worker_id}] Qdrant 업서트 중... ({i+1}-{min(i+batch_size, len(points))}/{len(points)})")
+                upsert_batch_to_qdrant(batch)
+                time.sleep(0.5)  # 서버 부하 방지를 위한 짧은 대기
 
             # 벡터 매핑 정보 저장
             for i, point in enumerate(points):
+                chunk_metadata = {
+                    "start_time": semantic_chunks[i]['start_time'],
+                    "end_time": semantic_chunks[i]['end_time'],
+                    "chunk_index": i
+                }
+
                 vector_mapping = VectorMapping(
                     content_id=content.id,
-                    chunk_index=i,
-                    vector_id=point.id,
-                    collection_name="youtube_content",
-                    start_time=semantic_chunks[i]['start_time'],
-                    end_time=semantic_chunks[i]['end_time'],
-                    text_content=semantic_chunks[i]['text']
+                    chunk_id=point.id,
+                    vector_collection="youtube_content",
+                    chunk_text=semantic_chunks[i]['text'],
+                    chunk_order=i,
+                    chunk_metadata=chunk_metadata
                 )
                 db.add(vector_mapping)
+
+            # 콘텐츠 상태 업데이트
+            content.vector_stored = True
 
             # 작업 완료
             job.status = 'completed'
             job.completed_at = datetime.utcnow()
             db.commit()
 
-            print(f"  ✅ 벡터화 완료: {content.title[:50]}... ({len(points)}개 벡터)")
+            print(f"  ✅ [Worker {self.worker_id}] 벡터화 완료: {content.title[:50]}... ({len(points)}개 벡터)")
 
         except Exception as e:
-            print(f"  ❌ 벡터화 실패: {e}")
+            print(f"  ❌ [Worker {self.worker_id}] 벡터화 실패: {e}")
             job.status = 'failed'
             job.error_message = str(e)
             job.completed_at = datetime.utcnow()
@@ -348,9 +526,31 @@ class VectorizeWorker:
         finally:
             db.close()
 
+    def _ensure_qdrant_collection(self):
+        """Qdrant 컬렉션 존재 확인 및 생성"""
+        try:
+            # 컬렉션 정보 조회
+            collection_info = self.qdrant_client.get_collection("youtube_content")
+            current_dim = collection_info.config.params.vectors.size
+
+            if current_dim != self.embedding_dimension:
+                print(f"  ⚠️ 차원 불일치: 현재 {current_dim}, 필요 {self.embedding_dimension}")
+                # 필요하면 재생성할 수 있지만, 데이터 손실 방지를 위해 경고만
+        except:
+            # 컬렉션이 없으면 생성
+            from qdrant_client.models import Distance, VectorParams
+            print(f"  📦 Qdrant 컬렉션 생성 중... ({self.embedding_dimension}차원)")
+            self.qdrant_client.create_collection(
+                collection_name="youtube_content",
+                vectors_config=VectorParams(
+                    size=self.embedding_dimension,
+                    distance=Distance.COSINE
+                )
+            )
+
     def start_worker(self):
         """워커 시작 - 워커 ID 기반 파티셔닝으로 작업 분산"""
-        print(f"🚀 벡터화 전용 워커 #{self.worker_id} 시작")
+        print(f"🚀 개선된 벡터화 워커 #{self.worker_id} 시작")
         total_workers = int(os.getenv('TOTAL_VECTORIZE_WORKERS', '3'))
         print(f"  총 워커 수: {total_workers}, 내 ID: {self.worker_id}")
 
@@ -373,7 +573,7 @@ class VectorizeWorker:
                 if my_jobs:
                     # 최대 5개 작업만 처리
                     for job in my_jobs[:5]:
-                        print(f"\\n🎯 [Worker {self.worker_id}] 벡터화 작업 선택: Job {job.id} (Priority: {job.priority})")
+                        print(f"\n🎯 [Worker {self.worker_id}] 벡터화 작업 선택: Job {job.id} (Priority: {job.priority})")
                         self.process_vectorization(job)
                         time.sleep(2)  # 작업 간 짧은 대기
                 else:
@@ -392,7 +592,7 @@ class VectorizeWorker:
 
 def main():
     """메인 실행 함수"""
-    worker = VectorizeWorker()
+    worker = ImprovedVectorizeWorker()
     worker.start_worker()
 
 

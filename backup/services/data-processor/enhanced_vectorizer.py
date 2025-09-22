@@ -199,7 +199,8 @@ class EnhancedVectorizer:
                 payload={
                     'content_id': content.id,
                     'type': 'summary',
-                    'text': summary_text,
+                    'summary': summary_text,  # 'text' 대신 'summary' 필드 사용
+                    'text': summary_text,  # 호환성을 위해 text도 유지
                     'title': content.title,
                     'url': content.url,
                     'channel_name': content.channel.name if content.channel else '',

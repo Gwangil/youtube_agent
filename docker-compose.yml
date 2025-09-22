@@ -107,6 +107,10 @@ services:
     ports:
       - "8084:8084"
     command: python /app/services/data-processor/stt_cost_api.py
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
     depends_on:
       - postgres
       - redis
@@ -193,7 +197,7 @@ services:
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/improved_stt_worker_with_cost.py
+    command: python /app/services/data-processor/stt_worker.py
     depends_on:
       - postgres
       - whisper-server
@@ -219,7 +223,7 @@ services:
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/improved_stt_worker_with_cost.py
+    command: python /app/services/data-processor/stt_worker.py
     depends_on:
       - postgres
       - whisper-server
@@ -245,7 +249,7 @@ services:
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/improved_stt_worker_with_cost.py
+    command: python /app/services/data-processor/stt_worker.py
     depends_on:
       - postgres
       - whisper-server
@@ -271,7 +275,7 @@ services:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
-    command: python /app/services/data-processor/improved_vectorize_worker.py
+    command: python /app/services/data-processor/vectorize_worker.py
     depends_on:
       - postgres
       - qdrant
@@ -300,7 +304,7 @@ services:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
-    command: python /app/services/data-processor/improved_vectorize_worker.py
+    command: python /app/services/data-processor/vectorize_worker.py
     depends_on:
       - postgres
       - qdrant
@@ -329,7 +333,7 @@ services:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
-    command: python /app/services/data-processor/improved_vectorize_worker.py
+    command: python /app/services/data-processor/vectorize_worker.py
     depends_on:
       - postgres
       - qdrant
@@ -389,6 +393,12 @@ services:
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       - OPENAI_API_BASE_URL=http://agent-service:8000/v1
       - OPENAI_API_KEY=dummy-key
+      - AIOHTTP_CLIENT_TIMEOUT=120
+      - REQUEST_TIMEOUT=120
+      - OPENAI_API_REQUEST_TIMEOUT=120
+      - DEFAULT_MODELS=youtube-agent
+      - ENABLE_OAUTH_SIGNUP=false
+      - ENABLE_RAG_WEB_SEARCH=false
     ports:
       - "3000:8080"
     volumes:

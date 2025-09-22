@@ -15,6 +15,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 import json
+import sys
 
 
 class AgentState(TypedDict):
@@ -85,7 +86,6 @@ class YouTubeRAGAgent:
     def _search_node(self, state: AgentState) -> AgentState:
         """다층 벡터 검색 노드"""
         query = state["query"]
-        import sys
         print(f"[Search] Query: {query}", file=sys.stderr)
 
         # 쿼리 임베딩 생성 (BGE-M3 사용)
@@ -150,31 +150,73 @@ class YouTubeRAGAgent:
         processed_results = []
         for result in search_results:
             payload = result.payload
+
+            # search_type에 따라 다른 필드 사용
+            search_type = payload.get('search_type', 'chunk')
+            if search_type == 'summary':
+                content_text = payload.get('summary', payload.get('text', ''))
+            elif search_type == 'paragraph':
+                content_text = payload.get('paragraph', payload.get('text', ''))
+            else:
+                content_text = payload.get('text', '')
+
+            # 디버깅 로그
+            print(f"[Process] Type: {search_type}, Score: {result.score:.4f}, Title: {payload.get('title', 'N/A')[:50]}...", file=sys.stderr)
+            print(f"[Process] Content length: {len(content_text)}", file=sys.stderr)
+
             processed_results.append({
                 'id': result.id,
                 'score': result.score,
-                'content': payload.get('text', ''),
+                'content': content_text,
                 'title': payload.get('title', ''),
                 'url': payload.get('url', ''),
+                'timestamp_url': payload.get('timestamp_url', ''),  # 타임스탬프 URL 추가
+                'start_time': payload.get('start_time'),  # 시작 시간 추가
+                'end_time': payload.get('end_time'),  # 종료 시간 추가
                 'platform': payload.get('platform', ''),
                 'publish_date': payload.get('publish_date', ''),
+                'search_type': search_type,
                 'metadata': payload
             })
 
         state["search_results"] = processed_results
 
-        # 검색된 내용을 컨텍스트로 결합 (길이 제한)
+        # 검색된 내용을 컨텍스트로 결합 (URL 정보 포함)
         context_parts = []
-        for result in processed_results:
+        for i, result in enumerate(processed_results):
             content = result['content']
-            # 각 결과를 200자로 제한
-            if len(content) > 200:
-                content = content[:200] + "..."
+
+            # 컨텐츠가 비어있으면 스킵
+            if not content:
+                print(f"[Context] Skipping empty content for: {result['title']}", file=sys.stderr)
+                continue
+
+            # search_type에 따라 다른 길이 제한
+            if result.get('search_type') == 'summary':
+                max_length = 300  # 요약은 더 길게
+            else:
+                max_length = 200
+
+            if len(content) > max_length:
+                content = content[:max_length] + "..."
+
+            # 타임스탬프 URL이 있으면 우선 사용, 없으면 일반 URL
+            url_to_use = result.get('timestamp_url', result.get('url', ''))
+
+            # 시간 정보 추가
+            time_info = ""
+            if 'start_time' in result and result['start_time'] is not None:
+                minutes = int(result['start_time']) // 60
+                seconds = int(result['start_time']) % 60
+                time_info = f" [{minutes}:{seconds:02d}]"
+
             context_parts.append(
-                f"[{result['title']}] {content}"
+                f"[{i+1}. {result['title']}]{time_info}\n{content}\nURL: {url_to_use}\n점수: {result['score']:.3f}"
             )
 
-        state["context"] = "\n\n".join(context_parts)
+            print(f"[Context] Added #{i+1}: {result['title'][:30]}... (score: {result['score']:.3f})", file=sys.stderr)
+
+        state["context"] = "\n\n---\n\n".join(context_parts)
         return state
 
     def _generate_node(self, state: AgentState) -> AgentState:
@@ -190,12 +232,13 @@ class YouTubeRAGAgent:
 답변 시 다음 사항을 고려하세요:
 1. 제공된 컨텍스트만을 기반으로 답변하세요
 2. 답변에 관련 YouTube 동영상 제목과 출처를 명시하세요
-3. 가능한 경우 해당 내용의 정확한 시간대로 이동할 수 있는 링크를 포함하세요
+3. 컨텍스트에 포함된 실제 URL을 사용하세요 (예시 URL을 만들지 마세요)
 4. 불확실한 내용은 추측하지 마세요
 5. 한국어로 자연스럽고 친근하게 답변하세요
 6. 컨텍스트에서 충분한 정보를 찾을 수 없으면 그렇게 말하세요
 
-답변 후에는 **참고 자료** 섹션을 추가하여 관련 링크들을 제공하세요.
+답변 후에는 **참고 자료** 섹션을 추가하여 컨텍스트에 포함된 실제 YouTube URL들을 제공하세요.
+절대 예시 URL(https://www.youtube.com/watch?v=example)을 사용하지 마세요.
 
 컨텍스트:
 {context}
@@ -223,7 +266,8 @@ class YouTubeRAGAgent:
         sources = []
         platforms = set()
         for result in search_results:
-            if result['score'] > 0.8:  # 높은 점수의 결과만 출처로 포함
+            # 점수 기준을 낮춤 (0.8 -> 0.55) 그리고 상위 5개만 포함
+            if result['score'] > 0.55 and len(sources) < 5:  # 점수 기준 낮추고 개수 제한
                 source_info = {
                     'title': result['title'],
                     'url': result['url'],
@@ -249,6 +293,21 @@ class YouTubeRAGAgent:
             "search_count": len(search_results),
             "high_score_count": len([r for r in search_results if r['score'] > 0.8])
         }
+
+        # 참고 자료를 답변에 추가
+        if sources:
+            references = "\n\n### 📚 참고 자료\n"
+            for i, source in enumerate(sources, 1):
+                # 타임스탬프 URL이 있으면 우선 사용
+                link_url = source.get('timestamp_url', source.get('url', ''))
+                timestamp = source.get('timestamp', '')
+
+                if timestamp:
+                    references += f"{i}. [{source['title']}]({link_url}) - {timestamp}\n"
+                else:
+                    references += f"{i}. [{source['title']}]({link_url})\n"
+
+            state["answer"] = state["answer"] + references
 
         return state
 
