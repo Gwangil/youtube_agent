@@ -363,15 +363,30 @@ async def get_channels(
 async def get_stats(db = Depends(get_db)):
     """서비스 통계 조회"""
     try:
+        # 채널 통계
         total_channels = db.query(Channel).count()
         active_channels = db.query(Channel).filter(Channel.is_active == True).count()
+
+        # 콘텐츠 통계
         total_content = db.query(Content).count()
-        processed_content = db.query(Content).filter(Content.vector_stored == True).count()
+        transcript_available = db.query(Content).filter(Content.transcript_available == True).count()
+
+        # Qdrant 벡터 통계
+        try:
+            from qdrant_client import QdrantClient
+            qdrant_client = QdrantClient(url=os.getenv('QDRANT_URL', 'http://qdrant:6333'))
+            collection_info = qdrant_client.get_collection('youtube_content')
+            vector_count = collection_info.points_count
+        except:
+            vector_count = 0
 
         platform_stats = {}
         for platform in ['youtube']:
             platform_channels = db.query(Channel).filter(Channel.platform == platform).count()
             platform_stats[platform] = platform_channels
+
+        # 지식화 진행률
+        knowledge_progress = (transcript_available / total_content * 100) if total_content > 0 else 0
 
         return {
             "channels": {
@@ -381,8 +396,9 @@ async def get_stats(db = Depends(get_db)):
             },
             "content": {
                 "total": total_content,
-                "processed": processed_content,
-                "processing_rate": round(processed_content / total_content * 100, 2) if total_content > 0 else 0
+                "transcript_available": transcript_available,
+                "vectors_in_qdrant": vector_count,
+                "knowledge_progress": f"{knowledge_progress:.1f}%"
             },
             "timestamp": datetime.utcnow().isoformat()
         }

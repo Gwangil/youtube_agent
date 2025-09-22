@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import hashlib
+import uuid
 import requests
 from datetime import datetime
 from typing import List, Dict
@@ -39,9 +40,9 @@ class ImprovedVectorizeWorker:
         self.engine = create_engine(get_database_url())
         self.SessionLocal = sessionmaker(bind=self.engine)
 
-        # Qdrant 연결
+        # Qdrant 연결 (타임아웃 증가)
         qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
-        self.qdrant_client = QdrantClient(url=qdrant_url)
+        self.qdrant_client = QdrantClient(url=qdrant_url, timeout=60)
 
         # 임베딩 서버 URL
         self.embedding_server_url = os.getenv('EMBEDDING_SERVER_URL', 'http://localhost:8083')
@@ -232,7 +233,7 @@ class ImprovedVectorizeWorker:
         """임베딩 서버에서 벡터 생성 (재시도 포함)"""
         try:
             # 헬스 체크
-            health_response = requests.get(f"{self.embedding_server_url}/health", timeout=2)
+            health_response = requests.get(f"{self.embedding_server_url}/health", timeout=10)
             if health_response.status_code != 200:
                 raise requests.exceptions.ConnectionError("Embedding server not ready")
 
@@ -262,6 +263,12 @@ class ImprovedVectorizeWorker:
 
         db = self.get_db()
         try:
+            # 현재 세션에서 job 다시 조회
+            job = db.query(ProcessingJob).filter(ProcessingJob.id == job.id).first()
+            if not job or job.status != 'pending':
+                print(f"  ⚠️ [Worker {self.worker_id}] 작업 {job.id}가 이미 처리됨 또는 없음")
+                return
+
             # 작업 상태 업데이트
             job.status = 'processing'
             job.started_at = datetime.utcnow()
@@ -344,10 +351,11 @@ class ImprovedVectorizeWorker:
                 for idx, (chunk_data, embedding) in enumerate(zip(batch_chunks, batch_embeddings)):
                     i = batch_start + idx
 
-                    # 청크 ID 생성
-                    chunk_id = hashlib.md5(
-                        f"{content.id}_{i}_{chunk_data['text'][:50]}".encode()
-                    ).hexdigest()
+                    # 청크 ID 생성 (UUID 형식으로)
+                    chunk_id = str(uuid.uuid5(
+                        uuid.NAMESPACE_DNS,
+                        f"{content.id}_{i}_{chunk_data['text'][:50]}"
+                    ))
 
                     # 타임스탬프 URL 생성
                     timestamp_url = self._create_timestamp_url(content.url, chunk_data['start_time'])
@@ -377,15 +385,21 @@ class ImprovedVectorizeWorker:
             # Qdrant 컬렉션 확인 및 생성
             self._ensure_qdrant_collection()
 
-            # Qdrant에 벡터 데이터 저장 (재시도 포함)
+            # Qdrant에 벡터 데이터 저장 (작은 배치로 나누어서)
             @retry(max_attempts=3, delay=1.0)
-            def upsert_to_qdrant():
+            def upsert_batch_to_qdrant(batch_points):
                 self.qdrant_client.upsert(
                     collection_name="youtube_content",
-                    points=points
+                    points=batch_points
                 )
 
-            upsert_to_qdrant()
+            # 50개씩 배치로 나누어 업서트
+            batch_size = 50
+            for i in range(0, len(points), batch_size):
+                batch = points[i:i+batch_size]
+                print(f"  📤 [Worker {self.worker_id}] Qdrant 업서트 중... ({i+1}-{min(i+batch_size, len(points))}/{len(points)})")
+                upsert_batch_to_qdrant(batch)
+                time.sleep(0.5)  # 서버 부하 방지를 위한 짧은 대기
 
             # 벡터 매핑 정보 저장
             for i, point in enumerate(points):
@@ -404,6 +418,9 @@ class ImprovedVectorizeWorker:
                     chunk_metadata=chunk_metadata
                 )
                 db.add(vector_mapping)
+
+            # 콘텐츠 상태 업데이트
+            content.vector_stored = True
 
             # 작업 완료
             job.status = 'completed'

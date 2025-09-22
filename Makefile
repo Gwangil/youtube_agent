@@ -189,6 +189,72 @@ clean-orphans:  ## 고아 데이터 정리 (Qdrant의 불일치 벡터 삭제)
 
 ##@ 🧪 테스트 및 검증
 
+# 단위 테스트
+test-unit:  ## 단위 테스트 실행
+	@echo "${YELLOW}단위 테스트 실행...${NC}"
+	@docker exec youtube_data_processor pytest /app/test/unit -v --tb=short || true
+
+# 통합 테스트
+test-integration:  ## 통합 테스트 실행
+	@echo "${YELLOW}통합 테스트 실행...${NC}"
+	@docker exec youtube_data_processor pytest /app/test/integration -v --tb=short || true
+
+# 파이프라인 테스트
+test-pipeline:  ## 데이터 파이프라인 E2E 테스트
+	@echo "${YELLOW}파이프라인 테스트 시작...${NC}"
+	@echo "1. 테스트 채널 추가..."
+	@curl -X POST http://localhost:8000/api/channels \
+		-H "Content-Type: application/json" \
+		-d '{"name":"TestChannel","url":"https://www.youtube.com/@test","platform":"youtube"}' || true
+	@echo ""
+	@echo "2. 처리 상태 확인..."
+	@sleep 5
+	@make check-jobs
+	@echo "${GREEN}파이프라인 테스트 완료${NC}"
+
+# GPU 서버 테스트
+test-gpu-servers:  ## GPU 서버 동작 테스트
+	@echo "${YELLOW}GPU 서버 테스트...${NC}"
+	@echo "Whisper 서버 테스트:"
+	@curl -f http://localhost:8082/health || echo "${RED}Whisper 서버 실패${NC}"
+	@echo ""
+	@echo "Embedding 서버 테스트:"
+	@curl -f http://localhost:8083/health || echo "${RED}Embedding 서버 실패${NC}"
+	@echo ""
+	@echo "${GREEN}GPU 서버 테스트 완료${NC}"
+
+# 성능 벤치마크
+test-benchmark:  ## 성능 벤치마크 실행
+	@echo "${YELLOW}벤치마크 실행...${NC}"
+	@docker exec youtube_data_processor python /app/test/test_embeddings_benchmark.py || true
+
+# 커버리지 측정
+test-coverage:  ## 테스트 커버리지 측정
+	@echo "${YELLOW}테스트 커버리지 측정...${NC}"
+	@docker exec youtube_data_processor pytest --cov=/app/src --cov=/app/services --cov-report=term-missing || true
+
+# 보안 스캔
+test-security:  ## 보안 취약점 스캔
+	@echo "${YELLOW}보안 스캔 실행...${NC}"
+	@docker exec youtube_data_processor pip list --format=freeze | docker exec -i youtube_data_processor safety check --stdin || true
+
+# 배포 전 체크
+pre-deploy-check:  ## 배포 전 체크리스트
+	@echo "${YELLOW}배포 전 체크 시작...${NC}"
+	@echo "1. 헬스체크..."
+	@make test-health
+	@echo ""
+	@echo "2. 데이터 정합성..."
+	@make check-data
+	@echo ""
+	@echo "3. GPU 서버 상태..."
+	@make test-gpu-servers
+	@echo ""
+	@echo "4. API 테스트..."
+	@make test-all
+	@echo ""
+	@echo "${GREEN}✅ 배포 준비 완료${NC}"
+
 test-health:  ## API 헬스체크
 	@echo "${GREEN}헬스체크 실행 중...${NC}"
 	@curl -s http://localhost:8000/health | python -m json.tool || echo "${RED}API 서버가 응답하지 않습니다.${NC}"

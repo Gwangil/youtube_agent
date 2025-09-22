@@ -19,9 +19,11 @@ sys.path.append('/app')
 sys.path.append('/app/shared')
 
 from shared.models.database import (
-    Channel, Content, ProcessingJob, VectorMapping,
+    Channel, Content, ProcessingJob, VectorMapping, Transcript,
     get_database_url
 )
+from qdrant_client import QdrantClient
+import requests
 
 app = FastAPI(title="데이터 처리 모니터링 대시보드")
 
@@ -146,6 +148,14 @@ async def dashboard():
                             <div class="stat-label">벡터화 완료</div>
                         </div>
                         <div class="stat-item">
+                            <div class="stat-number">${data.vectors_in_qdrant || 0}</div>
+                            <div class="stat-label">Qdrant 벡터</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-number">${data.transcript_segments || 0}</div>
+                            <div class="stat-label">트랜스크립트</div>
+                        </div>
+                        <div class="stat-item">
                             <div class="stat-number">${data.knowledge_progress.toFixed(1)}%</div>
                             <div class="stat-label">지식화 진행률</div>
                         </div>
@@ -254,10 +264,26 @@ async def get_stats():
         # 기본 통계
         content_total = db.query(Content).count()
         stt_completed = db.query(Content).filter(Content.transcript_available == True).count()
-        vectorized = db.query(Content).filter(Content.vector_stored == True).count()
+
+        # 트랜스크립트 세그먼트 수
+        transcript_segments = db.query(Transcript).count()
+
+        # Qdrant 벡터 수 확인
+        try:
+            qdrant_client = QdrantClient(url='http://qdrant:6333')
+            collection_info = qdrant_client.get_collection('youtube_content')
+            vectorized_count = collection_info.points_count
+        except:
+            vectorized_count = 0
+
+        # 벡터화 완료된 콘텐츠 수 (작업 기준)
+        vectorized_contents = db.query(ProcessingJob).filter(
+            ProcessingJob.job_type == 'vectorize',
+            ProcessingJob.status == 'completed'
+        ).count()
 
         # 지식화 진행률
-        knowledge_progress = (vectorized / content_total * 100) if content_total > 0 else 0
+        knowledge_progress = (vectorized_contents / content_total * 100) if content_total > 0 else 0
 
         # 작업 상태별 카운트
         job_status = {}
@@ -280,26 +306,55 @@ async def get_stats():
             ProcessingJob.status == 'processing'
         ).count()
 
-        # 워커 상태 (추정)
+        # 워커 상태 확인
+        processing_jobs = db.query(ProcessingJob).filter(
+            ProcessingJob.status == 'processing'
+        ).all()
+
+        stt_active = sum(1 for job in processing_jobs if job.job_type in ['process_audio', 'extract_transcript'])
+        vec_active = sum(1 for job in processing_jobs if job.job_type == 'vectorize')
+
+        # 에이전트 서비스 상태 확인
+        try:
+            agent_response = requests.get('http://agent-service:8000/health', timeout=1)
+            agent_status = 'Active' if agent_response.status_code == 200 else 'Error'
+        except:
+            agent_status = 'Offline'
+
         workers = {
             "STT Workers": {
-                "active": 3,  # 실행 중인 STT 워커 수
-                "last_activity": "진행 중"
+                "active": 3,
+                "processing": stt_active,
+                "last_activity": "진행 중" if stt_active > 0 else "대기 중"
             },
-            "Vectorization Worker": {
-                "active": 1,  # 벡터화 워커
-                "last_activity": "진행 중"
+            "Vectorization Workers": {
+                "active": 3,
+                "processing": vec_active,
+                "last_activity": "진행 중" if vec_active > 0 else "대기 중"
             },
-            "Main Processor": {
-                "active": 1,  # 메인 프로세서
-                "last_activity": "대기 중"
+            "RAG Agent Service": {
+                "active": 1,
+                "status": agent_status,
+                "last_activity": agent_status
+            },
+            "Whisper Server": {
+                "active": 1,
+                "status": "GPU Active" if stt_active > 0 else "Ready",
+                "last_activity": "GPU 모델 사용 중"
+            },
+            "Embedding Server": {
+                "active": 1,
+                "status": "GPU Active" if vec_active > 0 else "Ready",
+                "last_activity": "BGE-M3 모델 사용 중"
             }
         }
 
         return {
             "content_total": content_total,
             "stt_completed": stt_completed,
-            "vectorized": vectorized,
+            "vectorized": vectorized_contents,
+            "vectors_in_qdrant": vectorized_count,
+            "transcript_segments": transcript_segments,
             "knowledge_progress": knowledge_progress,
             "job_status": job_status,
             "workers": workers,

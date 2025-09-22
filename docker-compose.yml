@@ -91,6 +91,32 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # STT Cost Management API
+  stt-cost-api:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_cost_api
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - REDIS_URL=redis://redis:6379
+      - STT_DAILY_COST_LIMIT=${STT_DAILY_COST_LIMIT:-10.0}
+      - STT_MONTHLY_COST_LIMIT=${STT_MONTHLY_COST_LIMIT:-100.0}
+      - STT_SINGLE_VIDEO_LIMIT=${STT_SINGLE_VIDEO_LIMIT:-2.0}
+      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
+    ports:
+      - "8084:8084"
+    command: python /app/services/data-processor/stt_cost_api.py
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   # Embedding Server (Centralized embeddings)
   embedding-server:
     build:
@@ -159,16 +185,20 @@ services:
       - WHISPER_SERVER_URL=http://whisper-server:8082
       - STT_WORKER_ID=0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
     volumes:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/improved_stt_worker.py
+    command: python /app/services/data-processor/improved_stt_worker_with_cost.py
     depends_on:
       - postgres
       - whisper-server
+      - stt-cost-api
+      - redis
     restart: unless-stopped
 
   stt-worker-2:
@@ -181,16 +211,20 @@ services:
       - WHISPER_SERVER_URL=http://whisper-server:8082
       - STT_WORKER_ID=1
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
     volumes:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/improved_stt_worker.py
+    command: python /app/services/data-processor/improved_stt_worker_with_cost.py
     depends_on:
       - postgres
       - whisper-server
+      - stt-cost-api
+      - redis
     restart: unless-stopped
 
   stt-worker-3:
@@ -203,16 +237,20 @@ services:
       - WHISPER_SERVER_URL=http://whisper-server:8082
       - STT_WORKER_ID=2
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
     volumes:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/improved_stt_worker.py
+    command: python /app/services/data-processor/improved_stt_worker_with_cost.py
     depends_on:
       - postgres
       - whisper-server
+      - stt-cost-api
+      - redis
     restart: unless-stopped
 
   # Vectorization Workers (Scaled Out)
@@ -332,11 +370,13 @@ services:
       - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
       - QDRANT_URL=http://qdrant:6333
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server:8083
     ports:
       - "8000:8000"
     depends_on:
       - postgres
       - qdrant
+      - embedding-server
     restart: unless-stopped
 
   # UI Service (OpenWebUI)

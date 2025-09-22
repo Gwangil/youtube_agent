@@ -1,10 +1,10 @@
-FROM python:3.11-slim
+# Multi-stage build for smaller image
+FROM python:3.11-slim as builder
 
 WORKDIR /app
 
-# Install system dependencies
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
-    ffmpeg \
     git \
     build-essential \
     curl \
@@ -15,29 +15,37 @@ COPY requirements.txt .
 COPY services/data-processor/requirements.txt ./processor-requirements.txt
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir -r processor-requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir -r processor-requirements.txt
 
-# Copy shared modules
+# Final stage
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application code
 COPY shared/ ./shared/
-
-# Copy original modules
 COPY src/ ./src/
-
-# Copy data processor service
 COPY services/data-processor/ ./
-
-# Copy scripts
 COPY scripts/ ./scripts/
 
-# Copy pre-downloaded models (if exists)
-# This will copy models if they exist, otherwise continue
-COPY models/ /app/models/
-
-# Create data and model directories
+# Create directories for models and data (models will be mounted as volume)
 RUN mkdir -p /app/data /app/models/whisper /app/models/embeddings
 
 # Set environment variables
 ENV PYTHONPATH=/app:/app/shared:/app/src
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "app.py"]

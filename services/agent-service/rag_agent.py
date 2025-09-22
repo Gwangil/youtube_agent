@@ -6,7 +6,7 @@ YouTube 콘텐츠를 기반으로 한 지능형 질의응답 시스템
 import os
 from typing import List, Dict, Any, TypedDict, Annotated
 from operator import add
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from langchain.schema import Document
 from langchain.prompts import ChatPromptTemplate
 from qdrant_client import QdrantClient
@@ -38,10 +38,8 @@ class YouTubeRAGAgent:
             openai_api_key=os.getenv('OPENAI_API_KEY')
         )
 
-        # 임베딩 모델 초기화
-        self.embeddings = OpenAIEmbeddings(
-            openai_api_key=os.getenv('OPENAI_API_KEY')
-        )
+        # BGE-M3 임베딩 서버 URL
+        self.embedding_server_url = os.getenv('EMBEDDING_SERVER_URL', 'http://embedding-server:8083')
 
         # Qdrant 클라이언트 초기화
         qdrant_url = os.getenv('QDRANT_URL', 'http://localhost:6333')
@@ -49,6 +47,23 @@ class YouTubeRAGAgent:
 
         # 그래프 구성
         self.graph = self._build_graph()
+
+    def _get_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """BGE-M3 임베딩 서버에서 벡터 생성"""
+        import requests
+        try:
+            response = requests.post(
+                f"{self.embedding_server_url}/embed",
+                json={"texts": texts},
+                timeout=30
+            )
+            if response.status_code == 200:
+                return response.json()['embeddings']
+            else:
+                raise Exception(f"임베딩 서버 오류: {response.status_code}")
+        except Exception as e:
+            print(f"임베딩 생성 실패: {e}")
+            raise
 
     def _build_graph(self) -> StateGraph:
         """LangGraph 구성"""
@@ -68,19 +83,68 @@ class YouTubeRAGAgent:
         return workflow.compile()
 
     def _search_node(self, state: AgentState) -> AgentState:
-        """벡터 검색 노드"""
+        """다층 벡터 검색 노드"""
         query = state["query"]
+        import sys
+        print(f"[Search] Query: {query}", file=sys.stderr)
 
-        # 쿼리 임베딩 생성
-        query_embedding = self.embeddings.embed_query(query)
+        # 쿼리 임베딩 생성 (BGE-M3 사용)
+        try:
+            query_embedding = self._get_embeddings([query])[0]
+            print(f"[Search] Embedding dimension: {len(query_embedding)}", file=sys.stderr)
+        except Exception as e:
+            print(f"[Search] Embedding error: {e}", file=sys.stderr)
+            raise
 
-        # 벡터 검색 수행
-        search_results = self.qdrant_client.search(
+        all_results = []
+
+        # 1. 요약 검색 (전체 영상 이해)
+        try:
+            summary_results = self.qdrant_client.search(
+                collection_name="youtube_summaries",
+                query_vector=query_embedding,
+                limit=3,
+                score_threshold=0.5  # BGE-M3에 맞는 threshold
+            )
+            print(f"[Search] Summary results: {len(summary_results)}")
+            for result in summary_results:
+                print(f"  - Score: {result.score:.4f}, Title: {result.payload.get('title', 'N/A')}")
+                result.payload['search_type'] = 'summary'
+                all_results.append(result)
+        except Exception as e:
+            print(f"[Search] Summary search error: {e}")
+            import traceback
+            traceback.print_exc()
+            pass  # 컬렉션이 없으면 무시
+
+        # 2. 문단 검색 (중간 단위 컨텍스트)
+        try:
+            paragraph_results = self.qdrant_client.search(
+                collection_name="youtube_paragraphs",
+                query_vector=query_embedding,
+                limit=5,
+                score_threshold=0.5
+            )
+            for result in paragraph_results:
+                result.payload['search_type'] = 'paragraph'
+                all_results.append(result)
+        except Exception as e:
+            print(f"[Search] Paragraph search error: {e}", file=sys.stderr)
+            pass
+
+        # 3. 세밀한 청크 검색 (기존 방식)
+        chunk_results = self.qdrant_client.search(
             collection_name="youtube_content",
             query_vector=query_embedding,
-            limit=3,
-            score_threshold=0.7
+            limit=5,
+            score_threshold=0.5
         )
+        for result in chunk_results:
+            result.payload['search_type'] = 'chunk'
+            all_results.append(result)
+
+        # 점수 기준으로 정렬하고 상위 10개 선택
+        search_results = sorted(all_results, key=lambda x: x.score, reverse=True)[:10]
 
         # 검색 결과 처리
         processed_results = []
@@ -89,7 +153,7 @@ class YouTubeRAGAgent:
             processed_results.append({
                 'id': result.id,
                 'score': result.score,
-                'content': payload.get('chunk_text', ''),
+                'content': payload.get('text', ''),
                 'title': payload.get('title', ''),
                 'url': payload.get('url', ''),
                 'platform': payload.get('platform', ''),
@@ -195,7 +259,7 @@ class YouTubeRAGAgent:
         limit: int = 10
     ) -> List[Dict]:
         """유사 콘텐츠 검색"""
-        query_embedding = self.embeddings.embed_query(query)
+        query_embedding = self._get_embeddings([query])[0]
 
         # 필터 구성
         search_filter = None
@@ -225,7 +289,7 @@ class YouTubeRAGAgent:
             query_vector=query_embedding,
             query_filter=search_filter,
             limit=limit,
-            score_threshold=0.6
+            score_threshold=0.5
         )
 
         # 결과 정리
@@ -235,7 +299,7 @@ class YouTubeRAGAgent:
             processed_results.append({
                 'id': result.id,
                 'score': result.score,
-                'content': payload.get('chunk_text', ''),
+                'content': payload.get('text', ''),
                 'title': payload.get('title', ''),
                 'url': payload.get('url', ''),
                 'platform': payload.get('platform', ''),
@@ -247,6 +311,8 @@ class YouTubeRAGAgent:
 
     def ask(self, query: str, filters: Dict = None) -> Dict:
         """질문에 대한 답변 생성"""
+        print(f"[Ask] Query received: {query}")
+
         # 초기 상태 설정
         initial_state = {
             "messages": [],
@@ -262,7 +328,9 @@ class YouTubeRAGAgent:
             initial_state["filters"] = filters
 
         # 그래프 실행
+        print(f"[Ask] Invoking graph with state...")
         result = self.graph.invoke(initial_state)
+        print(f"[Ask] Graph execution complete. Found {len(result.get('search_results', []))} results")
 
         return {
             "query": query,
