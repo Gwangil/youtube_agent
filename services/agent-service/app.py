@@ -326,7 +326,7 @@ async def get_trending_topics(
 @app.get("/channels", response_model=List[ChannelInfo])
 async def get_channels(
     platform: Optional[str] = None,
-    is_active: bool = True,
+    is_active: Optional[bool] = None,  # Changed: None means all channels
     db = Depends(get_db)
 ):
     """채널 목록 조회"""
@@ -535,6 +535,229 @@ async def activate_channel(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"채널 활성화 실패: {str(e)}")
+
+
+# ===================== 콘텐츠 관리 API =====================
+
+@app.get("/api/contents")
+async def get_contents(
+    channel_id: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    page: int = 1,
+    page_size: int = 50,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+    db = Depends(get_db)
+):
+    """콘텐츠 목록 조회"""
+    try:
+        query = db.query(Content, Channel).join(Channel, Content.channel_id == Channel.id)
+
+        if channel_id:
+            query = query.filter(Content.channel_id == channel_id)
+        if is_active is not None:
+            query = query.filter(Content.is_active == is_active)
+
+        # 정렬 처리
+        if sort_by == "channel_name":
+            sort_column = Channel.name
+        elif sort_by == "title":
+            sort_column = Content.title
+        elif sort_by == "duration":
+            sort_column = Content.duration
+        elif sort_by == "created_at":
+            sort_column = Content.created_at
+        else:
+            sort_column = Content.created_at
+
+        if sort_order == "asc":
+            query = query.order_by(sort_column.asc())
+        else:
+            query = query.order_by(sort_column.desc())
+
+        total = query.count()
+        offset = (page - 1) * page_size
+        contents = query.offset(offset).limit(page_size).all()
+
+        result = []
+        for content, channel in contents:
+            result.append({
+                "id": content.id,
+                "title": content.title,
+                "url": content.url,
+                "duration": content.duration,
+                "channel_id": content.channel_id,
+                "channel_name": channel.name,
+                "transcript_available": content.transcript_available,
+                "vector_stored": content.vector_stored,
+                "is_active": content.is_active if hasattr(content, 'is_active') else True,
+                "created_at": content.created_at.isoformat() if content.created_at else None
+            })
+
+        return {
+            "contents": result,
+            "total": total,
+            "pages": (total + page_size - 1) // page_size,
+            "page": page
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/contents/{content_id}/toggle")
+async def toggle_content_status(
+    content_id: int,
+    db = Depends(get_db)
+):
+    """콘텐츠 활성/비활성 토글"""
+    try:
+        content = db.query(Content).filter(Content.id == content_id).first()
+        if not content:
+            raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+
+        # 토글
+        content.is_active = not content.is_active
+
+        # 비활성화 시 벡터 DB에서 제거
+        if not content.is_active:
+            from qdrant_client import QdrantClient
+            qdrant_client = QdrantClient(url=os.getenv('QDRANT_URL', 'http://qdrant:6333'))
+
+            # 해당 콘텐츠의 벡터 삭제
+            for collection in ['youtube_content', 'youtube_summaries', 'youtube_paragraphs']:
+                try:
+                    qdrant_client.delete(
+                        collection_name=collection,
+                        points_selector={
+                            "filter": {
+                                "must": [
+                                    {"key": "content_id", "match": {"value": content_id}}
+                                ]
+                            }
+                        }
+                    )
+                except:
+                    pass  # 컬렉션이 없으면 무시
+
+        # 재활성화 시 재처리 큐에 추가
+        elif content.is_active and content.vector_stored:
+            # 이미 처리된 데이터가 있으면 벡터만 재생성
+            from shared.models.database import ProcessingJob
+            job = ProcessingJob(
+                content_id=content_id,
+                job_type='vectorize',
+                status='pending',
+                priority=5
+            )
+            db.add(job)
+
+        db.commit()
+
+        return {"message": f"콘텐츠가 {'활성화' if content.is_active else '비활성화'}되었습니다"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/contents/bulk-toggle")
+async def bulk_toggle_contents(
+    request: dict,
+    db = Depends(get_db)
+):
+    """여러 콘텐츠 일괄 활성/비활성"""
+    try:
+        content_ids = request.get("content_ids", [])
+        is_active = request.get("is_active", True)
+
+        # 업데이트
+        db.query(Content).filter(Content.id.in_(content_ids)).update(
+            {"is_active": is_active},
+            synchronize_session=False
+        )
+
+        # 벡터 DB 동기화
+        if not is_active:
+            # 비활성화 시 벡터 삭제
+            from qdrant_client import QdrantClient
+            qdrant_client = QdrantClient(url=os.getenv('QDRANT_URL', 'http://qdrant:6333'))
+
+            for content_id in content_ids:
+                for collection in ['youtube_content', 'youtube_summaries', 'youtube_paragraphs']:
+                    try:
+                        qdrant_client.delete(
+                            collection_name=collection,
+                            points_selector={
+                                "filter": {
+                                    "must": [
+                                        {"key": "content_id", "match": {"value": content_id}}
+                                    ]
+                                }
+                            }
+                        )
+                    except:
+                        pass
+
+        db.commit()
+
+        return {"message": f"{len(content_ids)}개 콘텐츠가 {'활성화' if is_active else '비활성화'}되었습니다"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/contents/{content_id}/reprocess")
+async def reprocess_content(
+    content_id: int,
+    db = Depends(get_db)
+):
+    """콘텐츠 재처리"""
+    try:
+        content = db.query(Content).filter(Content.id == content_id).first()
+        if not content:
+            raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+
+        # 기존 데이터 삭제
+        from shared.models.database import ProcessingJob, Transcript, VectorMapping
+
+        # 트랜스크립트와 벡터 매핑 삭제
+        db.query(Transcript).filter(Transcript.content_id == content_id).delete()
+        db.query(VectorMapping).filter(VectorMapping.content_id == content_id).delete()
+
+        # 콘텐츠 상태 리셋
+        content.transcript_available = False
+        content.vector_stored = False
+        content.is_active = True
+
+        # 처리 작업 추가
+        db.query(ProcessingJob).filter(ProcessingJob.content_id == content_id).delete()
+
+        jobs = [
+            ProcessingJob(
+                content_id=content_id,
+                job_type='extract_transcript',
+                status='pending',
+                priority=5
+            ),
+            ProcessingJob(
+                content_id=content_id,
+                job_type='process_audio',
+                status='pending',
+                priority=5
+            )
+        ]
+
+        for job in jobs:
+            db.add(job)
+
+        db.commit()
+
+        return {"message": "콘텐츠가 재처리 큐에 추가되었습니다"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

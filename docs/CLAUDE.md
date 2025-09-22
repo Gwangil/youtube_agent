@@ -31,10 +31,20 @@
 
 ## 🐳 Docker 서비스 구성
 
-### 실행 중인 서비스들
+### 실행 방법 (모드별 분리 구성)
 ```bash
-# 전체 서비스 시작
-docker-compose up -d
+# 환경 자동 감지 후 실행
+./start.sh
+
+# GPU 모드 강제 실행
+./start_gpu.sh
+# 또는
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml up -d
+
+# CPU 모드 강제 실행 (OpenAI API)
+./start_cpu.sh
+# 또는
+docker-compose -f docker-compose.base.yml -f docker-compose.cpu.yml up -d
 
 # 개별 서비스 재시작
 docker restart youtube_agent_service      # RAG 에이전트 (포트: 8000)
@@ -43,7 +53,7 @@ docker restart youtube_data_collector     # 데이터 수집
 docker restart youtube_admin_dashboard    # 관리 대시보드 (포트: 8090)
 ```
 
-### 서비스별 역할 (18개 컨테이너)
+### 서비스 구성 (모드에 따라 다름)
 - **postgres**: 메타데이터 저장 (채널, 콘텐츠, 작업 큐, 트랜스크립트)
 - **redis**: 작업 큐, 캐시, 비용 승인 대기열
 - **qdrant**: 벡터 데이터베이스 (포트: 6333)
@@ -477,16 +487,94 @@ test/
   - 검색 응답: 500ms 이내
   - RAG 응답: 3초 이내
 
+## 🧪 테스트 전략 (New)
+
+### 테스트 명령어
+```bash
+# 환경 검증
+./detect_environment.sh
+
+# GPU 서버 테스트 (GPU 모드)
+docker exec youtube_whisper_server python -c "import torch; print(torch.cuda.is_available())"
+
+# STT 처리 테스트
+curl -X POST http://localhost:8082/transcribe \
+  -F "audio=@test_audio.mp3" \
+  -F "language=ko"
+
+# RAG 검색 테스트
+curl -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "테스트 쿼리", "limit": 5}'
+
+# 코스트 검증 (CPU/OpenAI API 모드)
+curl http://localhost:8084/api/cost-summary
+```
+
+### 통합 테스트
+```bash
+# E2E 파이프라인 테스트
+docker exec youtube_admin_dashboard python -m pytest tests/test_pipeline.py
+
+# 성능 벤치마크
+docker exec youtube_agent_service python tests/benchmark_rag.py
+```
+
+## 🔧 서비스 운영 가이드 (New)
+
+### 모드 전환
+```bash
+# GPU → CPU 전환
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml down --remove-orphans
+./start_cpu.sh
+
+# CPU → GPU 전환
+docker-compose -f docker-compose.base.yml -f docker-compose.cpu.yml down --remove-orphans
+./start_gpu.sh
+
+# 이전 구성 정리
+./cleanup_old_containers.sh
+```
+
+### 데이터 무결성 관리
+```bash
+# 정합성 확인
+docker exec youtube_data_processor python scripts/check_data_integrity.py
+
+# 데이터 초기화 (주의: 데이터 손실)
+docker exec youtube_postgres psql -U youtube_user -d youtube_agent -c "TRUNCATE TABLE processing_jobs CASCADE;"
+
+# 작업 큐 클리어
+docker exec youtube_redis redis-cli FLUSHDB
+```
+
+### 문제 해결
+```bash
+# 고아 컨테이너 정리
+./cleanup_old_containers.sh
+
+# 네트워크 문제 해결
+./fix_network.sh
+
+# .env 파일 검증
+source .env && echo "API Key: ${OPENAI_API_KEY:0:10}..."
+
+# 서비스 로그 확인
+docker-compose -f docker-compose.base.yml -f docker-compose.[gpu|cpu].yml logs -f [service]
+```
+
 ---
-**마지막 업데이트**: 2025-09-22
+**마지막 업데이트**: 2025-09-23
 **최근 주요 개선사항**:
-- OpenWebUI 타임아웃 120초로 증가 (LLM 응답 시간 고려)
-- RAG 점수 임계값 0.8→0.55 하향 (더 많은 관련 콘텐츠 포함)
-- 모든 데이터에서 "한국어 팟캐스트" 오염 텍스트 제거 완료
-- vectorize_worker.py에 Summary 생성 기능 통합
-- enhanced_vectorizer.py 기능을 vectorize_worker.py로 통합
-- docker-compose.yml 볼륨 매핑 수정 (stt-cost-api)
-- STT 비용 관리자 import 오류 수정 (List, HTMLResponse)
-- 4개 Qdrant 컬렉션 전체 데이터 정제 완료
+- **GPU/CPU 모드 분리**: 인프라별 docker-compose 파일 분리 (base/gpu/cpu)
+- **자동 환경 감지**: detect_environment.sh로 GPU 유무 자동 판별
+- **통합 실행 스크립트**: start.sh, start_gpu.sh, start_cpu.sh 제공
+- **네트워크 문제 해결**: fix_network.sh 스크립트 추가
+- **.env 파일 개선**: 인라인 주석 제거, source 방식 로드
+- **OpenAI 전용 모드**: FORCE_OPENAI_API 환경변수로 강제 API 사용
+- **임베딩 래퍼**: embedding_server_wrapper.py로 OpenAI/BGE-M3 선택
+- **비용 관리 강화**: STT API 사용 시 자동 비용 제한 및 승인
+- **문서 업데이트**: README.md, ARCHITECTURE.md, TROUBLESHOOTING.md 최신화
+- **컨테이너 정리**: cleanup_old_containers.sh 스크립트 추가
 - to memorize
-- to memorize
+- to memorize and update docs

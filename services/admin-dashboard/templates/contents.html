@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+
+{% block title %}콘텐츠 관리 - YouTube Agent{% endblock %}
+{% block header %}📹 콘텐츠 관리{% endblock %}
+
+<style>
+    .table thead th a {
+        cursor: pointer;
+    }
+    .table thead th a:hover {
+        text-decoration: underline !important;
+    }
+</style>
+
+{% block content %}
+<!-- 채널 선택 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-filter"></i> 채널 선택</h5>
+            </div>
+            <div class="card-body">
+                <form method="get" action="/contents">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <select class="form-select" name="channel_id" onchange="this.form.submit()">
+                                <option value="">전체 채널</option>
+                                {% for channel in channels %}
+                                <option value="{{ channel.id }}" {% if selected_channel_id == channel.id %}selected{% endif %}>
+                                    {{ channel.name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <select class="form-select" name="status" onchange="this.form.submit()">
+                                <option value="all" {% if status_filter == 'all' %}selected{% endif %}>전체 상태</option>
+                                <option value="active" {% if status_filter == 'active' %}selected{% endif %}>활성</option>
+                                <option value="inactive" {% if status_filter == 'inactive' %}selected{% endif %}>비활성</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-search"></i> 조회
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 콘텐츠 목록 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="fas fa-list"></i> 콘텐츠 목록</h5>
+                <div>
+                    <span class="badge bg-primary">총 {{ contents|length }}개</span>
+                    <span class="badge bg-success">활성 {{ active_count }}개</span>
+                    <span class="badge bg-secondary">비활성 {{ inactive_count }}개</span>
+                </div>
+            </div>
+            <div class="card-body">
+                {% if contents %}
+                    <div class="mb-3">
+                        <button class="btn btn-sm btn-success" onclick="toggleSelected(true)">
+                            <i class="fas fa-check"></i> 선택 항목 활성화
+                        </button>
+                        <button class="btn btn-sm btn-warning" onclick="toggleSelected(false)">
+                            <i class="fas fa-times"></i> 선택 항목 비활성화
+                        </button>
+                        <button class="btn btn-sm btn-info" onclick="selectAll()">
+                            <i class="fas fa-check-square"></i> 전체 선택
+                        </button>
+                        <button class="btn btn-sm btn-secondary" onclick="deselectAll()">
+                            <i class="fas fa-square"></i> 선택 해제
+                        </button>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead>
+                                <tr>
+                                    <th>
+                                        <input type="checkbox" id="selectAllCheckbox" onchange="selectAllChange()">
+                                    </th>
+                                    <th>
+                                        <a href="javascript:void(0)" onclick="sortBy('channel_name')" class="text-decoration-none text-dark">
+                                            채널 {% if sort_by == 'channel_name' %}<i class="fas fa-sort-{{ 'up' if sort_order == 'asc' else 'down' }}"></i>{% endif %}
+                                        </a>
+                                    </th>
+                                    <th>
+                                        <a href="javascript:void(0)" onclick="sortBy('title')" class="text-decoration-none text-dark">
+                                            제목 {% if sort_by == 'title' %}<i class="fas fa-sort-{{ 'up' if sort_order == 'asc' else 'down' }}"></i>{% endif %}
+                                        </a>
+                                    </th>
+                                    <th>
+                                        <a href="javascript:void(0)" onclick="sortBy('duration')" class="text-decoration-none text-dark">
+                                            길이 {% if sort_by == 'duration' %}<i class="fas fa-sort-{{ 'up' if sort_order == 'asc' else 'down' }}"></i>{% endif %}
+                                        </a>
+                                    </th>
+                                    <th>처리 상태</th>
+                                    <th>활성 상태</th>
+                                    <th>
+                                        <a href="javascript:void(0)" onclick="sortBy('created_at')" class="text-decoration-none text-dark">
+                                            등록일 {% if sort_by == 'created_at' %}<i class="fas fa-sort-{{ 'up' if sort_order == 'asc' else 'down' }}"></i>{% endif %}
+                                        </a>
+                                    </th>
+                                    <th>액션</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for content in contents %}
+                                <tr class="{% if not content.is_active %}table-secondary{% endif %}">
+                                    <td>
+                                        <input type="checkbox" class="content-checkbox" value="{{ content.id }}">
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">{{ content.channel_name }}</small>
+                                    </td>
+                                    <td>
+                                        <a href="{{ content.url }}" target="_blank" class="text-decoration-none">
+                                            {{ content.title[:60] }}{% if content.title|length > 60 %}...{% endif %}
+                                        </a>
+                                    </td>
+                                    <td>
+                                        <small>{{ (content.duration / 60)|round(1) if content.duration else '-' }}분</small>
+                                    </td>
+                                    <td>
+                                        {% if content.vector_stored %}
+                                            <span class="badge bg-success">완료</span>
+                                        {% elif content.transcript_available %}
+                                            <span class="badge bg-info">STT 완료</span>
+                                        {% else %}
+                                            <span class="badge bg-warning">대기</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if content.is_active %}
+                                            <span class="badge bg-success">활성</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">비활성</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">{{ content.created_at[:10] if content.created_at else '-' }}</small>
+                                    </td>
+                                    <td>
+                                        <div class="btn-group btn-group-sm">
+                                            <form method="post" action="/contents/{{ content.id }}/toggle" style="display: inline;">
+                                                <button type="submit" class="btn btn-sm {% if content.is_active %}btn-warning{% else %}btn-success{% endif %}"
+                                                        title="{% if content.is_active %}비활성화{% else %}활성화{% endif %}">
+                                                    <i class="fas {% if content.is_active %}fa-pause{% else %}fa-play{% endif %}"></i>
+                                                </button>
+                                            </form>
+                                            {% if content.vector_stored and not content.is_active %}
+                                            <button class="btn btn-sm btn-info" onclick="reprocess({{ content.id }})" title="재처리">
+                                                <i class="fas fa-redo"></i>
+                                            </button>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 페이징 -->
+                    {% if total_pages > 1 %}
+                    <nav>
+                        <ul class="pagination justify-content-center">
+                            <li class="page-item {% if current_page == 1 %}disabled{% endif %}">
+                                <a class="page-link" href="?page={{ current_page - 1 }}{% if selected_channel_id %}&channel_id={{ selected_channel_id }}{% endif %}&status={{ status_filter }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}">이전</a>
+                            </li>
+                            {% for page in range(1, total_pages + 1) %}
+                            <li class="page-item {% if page == current_page %}active{% endif %}">
+                                <a class="page-link" href="?page={{ page }}{% if selected_channel_id %}&channel_id={{ selected_channel_id }}{% endif %}&status={{ status_filter }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}">{{ page }}</a>
+                            </li>
+                            {% endfor %}
+                            <li class="page-item {% if current_page == total_pages %}disabled{% endif %}">
+                                <a class="page-link" href="?page={{ current_page + 1 }}{% if selected_channel_id %}&channel_id={{ selected_channel_id }}{% endif %}&status={{ status_filter }}&sort_by={{ sort_by }}&sort_order={{ sort_order }}">다음</a>
+                            </li>
+                        </ul>
+                    </nav>
+                    {% endif %}
+                {% else %}
+                    <div class="text-center py-5">
+                        <i class="fas fa-video fa-3x text-muted mb-3"></i>
+                        <h5 class="text-muted">콘텐츠가 없습니다</h5>
+                        <p class="text-muted">채널을 선택하거나 콘텐츠가 수집될 때까지 기다려주세요.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 도움말 -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="alert alert-info">
+            <h6><i class="fas fa-info-circle"></i> 콘텐츠 관리 가이드</h6>
+            <ul class="mb-0">
+                <li><strong>비활성화:</strong> 비활성화된 콘텐츠는 RAG 검색 대상에서 제외됩니다</li>
+                <li><strong>재활성화:</strong> 비활성화된 콘텐츠를 다시 활성화하면 벡터 DB에 재등록됩니다</li>
+                <li><strong>일괄 처리:</strong> 여러 콘텐츠를 선택하여 한 번에 활성/비활성화할 수 있습니다</li>
+                <li><strong>자동 동기화:</strong> 상태 변경 시 벡터 DB가 자동으로 동기화됩니다</li>
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// 현재 정렬 상태
+const currentSortBy = '{{ sort_by }}';
+const currentSortOrder = '{{ sort_order }}';
+
+function sortBy(field) {
+    const urlParams = new URLSearchParams(window.location.search);
+
+    // 같은 필드를 다시 클릭하면 정렬 순서를 토글
+    let newOrder = 'asc';
+    if (currentSortBy === field) {
+        newOrder = currentSortOrder === 'asc' ? 'desc' : 'asc';
+    }
+
+    urlParams.set('sort_by', field);
+    urlParams.set('sort_order', newOrder);
+
+    // 페이지를 1로 리셋
+    urlParams.set('page', '1');
+
+    window.location.search = urlParams.toString();
+}
+
+function selectAll() {
+    document.querySelectorAll('.content-checkbox').forEach(cb => cb.checked = true);
+}
+
+function deselectAll() {
+    document.querySelectorAll('.content-checkbox').forEach(cb => cb.checked = false);
+}
+
+function selectAllChange() {
+    const selectAll = document.getElementById('selectAllCheckbox').checked;
+    document.querySelectorAll('.content-checkbox').forEach(cb => cb.checked = selectAll);
+}
+
+async function toggleSelected(activate) {
+    const selected = [];
+    document.querySelectorAll('.content-checkbox:checked').forEach(cb => {
+        selected.push(cb.value);
+    });
+
+    if (selected.length === 0) {
+        alert('항목을 선택해주세요.');
+        return;
+    }
+
+    const action = activate ? '활성화' : '비활성화';
+    if (confirm(`선택한 ${selected.length}개 콘텐츠를 ${action}하시겠습니까?`)) {
+        try {
+            const response = await fetch('/contents/bulk-toggle', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    content_ids: selected,
+                    is_active: activate
+                })
+            });
+
+            if (response.ok) {
+                alert(`${selected.length}개 콘텐츠가 ${action}되었습니다.`);
+                location.reload();
+            } else {
+                alert('처리 중 오류가 발생했습니다.');
+            }
+        } catch (error) {
+            alert('요청 중 오류가 발생했습니다.');
+        }
+    }
+}
+
+async function reprocess(contentId) {
+    if (confirm('이 콘텐츠를 재처리하시겠습니까?')) {
+        try {
+            const response = await fetch(`/contents/${contentId}/reprocess`, {
+                method: 'POST'
+            });
+
+            if (response.ok) {
+                alert('재처리 작업이 큐에 추가되었습니다.');
+            } else {
+                alert('처리 중 오류가 발생했습니다.');
+            }
+        } catch (error) {
+            alert('요청 중 오류가 발생했습니다.');
+        }
+    }
+}
+</script>
+{% endblock %}

@@ -1,0 +1,214 @@
+# 기본 인프라 서비스 (공통)
+# 사용: docker-compose -f docker-compose.base.yml -f docker-compose.[gpu|cpu].yml up -d
+
+services:
+  # Database Services
+  postgres:
+    image: postgres:15-alpine
+    container_name: youtube_postgres
+    environment:
+      POSTGRES_DB: youtube_agent
+      POSTGRES_USER: youtube_user
+      POSTGRES_PASSWORD: youtube_pass
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U youtube_user -d youtube_agent"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - youtube_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: youtube_redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - youtube_network
+
+  # Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: youtube_qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # Data Collection Service (공통)
+  data-collector:
+    build:
+      context: .
+      dockerfile: services/data-collector/Dockerfile
+    container_name: youtube_data_collector
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # STT Cost Management API (공통)
+  stt-cost-api:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_cost_api
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - REDIS_URL=redis://redis:6379
+      - STT_DAILY_COST_LIMIT=${STT_DAILY_COST_LIMIT:-10.0}
+      - STT_MONTHLY_COST_LIMIT=${STT_MONTHLY_COST_LIMIT:-100.0}
+      - STT_SINGLE_VIDEO_LIMIT=${STT_SINGLE_VIDEO_LIMIT:-2.0}
+      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
+    ports:
+      - "8084:8084"
+    command: python /app/services/data-processor/stt_cost_api.py
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8084/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - youtube_network
+
+  # Monitoring Dashboard (공통)
+  monitoring-dashboard:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_monitoring
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/monitoring_api.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # Agent Service (공통)
+  agent-service:
+    build:
+      context: .
+      dockerfile: services/agent-service/Dockerfile
+    container_name: youtube_agent_service
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # EMBEDDING_SERVER_URL은 GPU/CPU 모드에서 오버라이드
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # UI Service (OpenWebUI) - 공통
+  ui-service:
+    build:
+      context: .
+      dockerfile: services/ui-service/Dockerfile
+    container_name: youtube_ui
+    environment:
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OPENAI_API_BASE_URL=http://agent-service:8000/v1
+      - OPENAI_API_KEY=dummy-key
+      - AIOHTTP_CLIENT_TIMEOUT=120
+      - REQUEST_TIMEOUT=120
+      - OPENAI_API_REQUEST_TIMEOUT=120
+      - DEFAULT_MODELS=youtube-agent
+      - ENABLE_OAUTH_SIGNUP=false
+      - ENABLE_RAG_WEB_SEARCH=false
+    ports:
+      - "3000:8080"
+    volumes:
+      - openwebui_data:/app/backend/data
+    depends_on:
+      - agent-service
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # Admin Dashboard (통합 관리 페이지) - 공통
+  admin-dashboard:
+    build:
+      context: ./services/admin-dashboard
+      dockerfile: Dockerfile
+    container_name: youtube_admin_dashboard
+    environment:
+      - AGENT_API_URL=http://agent-service:8000
+      - MONITORING_URL=http://localhost:8081
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./services/admin-dashboard:/app
+    depends_on:
+      - agent-service
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  openwebui_data:
+    driver: local
+
+networks:
+  youtube_network:
+    name: youtube_network
+    external: true

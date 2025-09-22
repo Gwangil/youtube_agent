@@ -8,10 +8,11 @@ import os
 import sys
 import json
 import re
+import tempfile
 import torch
 import whisper
 from datetime import datetime
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 import uvicorn
@@ -357,8 +358,49 @@ async def health_check():
         "device": whisper_server.device_info["type"]
     }
 
-@app.post("/transcribe", response_model=STTResponse)
-async def transcribe(request: STTRequest):
+@app.post("/transcribe")
+async def transcribe_file(
+    audio: UploadFile = File(...),
+    language: str = Form("ko")
+):
+    """파일 업로드 방식의 transcribe 엔드포인트"""
+    if not whisper_server or not whisper_server.model:
+        raise HTTPException(status_code=503, detail="모델이 로딩되지 않았습니다")
+
+    import tempfile
+    temp_audio_path = None
+
+    try:
+        # 업로드된 파일을 임시 파일로 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tmp_file:
+            temp_audio_path = tmp_file.name
+            content = await audio.read()
+            tmp_file.write(content)
+
+        # STT 처리
+        result = whisper_server.transcribe_audio(temp_audio_path, language)
+
+        # 응답 형식 변환 (stt_worker가 기대하는 형식)
+        return {
+            "segments": result["segments"],
+            "language": result["language"],
+            "text": " ".join([s.get("text", "") for s in result["segments"]])
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        # 임시 파일 삭제
+        if temp_audio_path and os.path.exists(temp_audio_path):
+            try:
+                os.remove(temp_audio_path)
+            except:
+                pass
+
+@app.post("/transcribe_path", response_model=STTResponse)
+async def transcribe_path(request: STTRequest):
+    """경로 기반 transcribe 엔드포인트 (기존 방식)"""
     if not whisper_server or not whisper_server.model:
         raise HTTPException(status_code=503, detail="모델이 로딩되지 않았습니다")
 

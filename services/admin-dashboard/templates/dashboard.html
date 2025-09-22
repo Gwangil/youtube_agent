@@ -22,19 +22,19 @@
             <div class="card-body">
                 <h5 class="card-title text-muted">총 콘텐츠</h5>
                 <h2 class="text-info">{{ stats.content.total if stats and stats.content else 0 }}</h2>
-                <small>처리됨: {{ stats.content.processed if stats and stats.content else 0 }}</small>
+                <small>스크립트: {{ stats.content.transcript_available if stats and stats.content else 0 }}</small>
             </div>
         </div>
     </div>
 
     <div class="col-md-3 mb-4">
-        <div class="card status-card {{ 'status-warning' if stats and stats.content and stats.content.processing_rate < 80 else '' }}">
+        <div class="card status-card">
             <div class="card-body">
-                <h5 class="card-title text-muted">처리율</h5>
-                <h2 class="text-warning">{{ stats.content.processing_rate if stats and stats.content else 0 }}%</h2>
+                <h5 class="card-title text-muted">지식화 진행률</h5>
+                <h2 class="text-warning">{{ stats.content.knowledge_progress if stats and stats.content else "0%" }}</h2>
                 <div class="progress" style="height: 5px;">
                     <div class="progress-bar bg-warning" role="progressbar"
-                         style="width: {{ stats.content.processing_rate if stats and stats.content else 0 }}%"></div>
+                         style="width: {{ stats.content.knowledge_progress if stats and stats.content else "0%" }}"></div>
                 </div>
             </div>
         </div>

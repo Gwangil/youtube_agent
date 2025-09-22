@@ -50,13 +50,16 @@ class DataCollector:
 
             for video in videos:
                 try:
-                    # 기존 콘텐츠 확인
+                    # 기존 콘텐츠 확인 (soft-deleted 포함)
                     existing = db.query(Content).filter(
                         Content.channel_id == channel.id,
                         Content.external_id == video['video_id']
                     ).first()
 
                     if existing:
+                        # 비활성화된 콘텐츠는 재추가하지 않음
+                        if not existing.is_active:
+                            print(f"비활성화된 콘텐츠 스킵: {video['title']}")
                         continue
 
                     # 새 콘텐츠 생성

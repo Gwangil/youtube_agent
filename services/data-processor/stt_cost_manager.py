@@ -8,7 +8,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple, List
-from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Boolean
+from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Boolean, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import redis
@@ -280,8 +280,6 @@ class STTCostManager:
         """비용 요약 정보 조회"""
         db = self.SessionLocal()
         try:
-            from sqlalchemy import func
-
             # 오늘 비용
             today = datetime.utcnow().date()
             daily_cost = db.query(

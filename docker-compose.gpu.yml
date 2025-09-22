@@ -1,63 +1,8 @@
+# GPU 기반 처리 서비스 (Whisper Large-v3 + BGE-M3)
+# 사용: docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+
 services:
-  # Database Services
-  postgres:
-    image: postgres:15-alpine
-    container_name: youtube_postgres
-    environment:
-      POSTGRES_DB: youtube_agent
-      POSTGRES_USER: youtube_user
-      POSTGRES_PASSWORD: youtube_pass
-      PGDATA: /var/lib/postgresql/data/pgdata
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U youtube_user -d youtube_agent"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: youtube_redis
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-    restart: unless-stopped
-
-  # Vector Database
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: youtube_qdrant
-    volumes:
-      - qdrant_data:/qdrant/storage
-    ports:
-      - "6333:6333"
-      - "6334:6334"
-    restart: unless-stopped
-
-  # Data Collection Service
-  data-collector:
-    build:
-      context: .
-      dockerfile: services/data-collector/Dockerfile
-    container_name: youtube_data_collector
-    environment:
-      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
-      - REDIS_URL=redis://redis:6379
-    volumes:
-      - ./data:/app/data
-      - ./config:/app/config
-    depends_on:
-      - postgres
-      - redis
-    restart: unless-stopped
-
-  # Whisper STT Server (GPU-enabled)
+  # Whisper STT Server (GPU 필수)
   whisper-server:
     build:
       context: .
@@ -66,6 +11,7 @@ services:
     environment:
       - CUDA_VISIBLE_DEVICES=0
       - WHISPER_MODEL_DIR=/app/models/whisper
+      - WHISPER_MODEL=large-v3
     ports:
       - "8082:8082"
     healthcheck:
@@ -90,38 +36,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    networks:
+      - youtube_network
 
-  # STT Cost Management API
-  stt-cost-api:
-    build:
-      context: .
-      dockerfile: services/data-processor/Dockerfile
-    container_name: youtube_stt_cost_api
-    environment:
-      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
-      - REDIS_URL=redis://redis:6379
-      - STT_DAILY_COST_LIMIT=${STT_DAILY_COST_LIMIT:-10.0}
-      - STT_MONTHLY_COST_LIMIT=${STT_MONTHLY_COST_LIMIT:-100.0}
-      - STT_SINGLE_VIDEO_LIMIT=${STT_SINGLE_VIDEO_LIMIT:-2.0}
-      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
-    ports:
-      - "8084:8084"
-    command: python /app/services/data-processor/stt_cost_api.py
-    volumes:
-      - ./src:/app/src
-      - ./shared:/app/shared
-      - ./services/data-processor:/app/services/data-processor
-    depends_on:
-      - postgres
-      - redis
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8084/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-  # Embedding Server (Centralized embeddings)
+  # BGE-M3 Embedding Server (GPU 권장)
   embedding-server:
     build:
       context: .
@@ -131,6 +49,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - EMBEDDING_SERVER_PORT=8083
       - CUDA_VISIBLE_DEVICES=0
+      - EMBEDDING_MODEL=BGE-M3
     ports:
       - "8083:8083"
     healthcheck:
@@ -153,8 +72,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    networks:
+      - youtube_network
 
-  # Data Processing Service (Main Controller)
+  # Data Processing Service (GPU 모드)
   data-processor:
     build:
       context: .
@@ -166,24 +87,35 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - WHISPER_SERVER_URL=http://whisper-server:8082
+      - EMBEDDING_SERVER_URL=http://embedding-server:8083
+      - PROCESSING_MODE=GPU
     volumes:
       - ./data:/app/data
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/app.py
     depends_on:
-      - postgres
-      - redis
-      - qdrant
-      - whisper-server
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      whisper-server:
+        condition: service_healthy
+      embedding-server:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - youtube_network
 
-  # STT Workers (GPU-only, no CPU fallback)
+  # STT Workers (GPU 모드)
   stt-worker-1:
     build:
       context: .
       dockerfile: services/data-processor/Dockerfile
-    container_name: youtube_stt_worker_1
+    container_name: youtube_stt_worker_1_gpu
     environment:
       - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
       - WHISPER_SERVER_URL=http://whisper-server:8082
@@ -191,25 +123,33 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - REDIS_URL=redis://redis:6379
       - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=GPU
+      - FORCE_GPU_MODE=true
     volumes:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/stt_worker.py
+    command: sh -c "/app/services/data-processor/wait_for_whisper.sh && python /app/services/data-processor/stt_worker.py"
     depends_on:
-      - postgres
-      - whisper-server
-      - stt-cost-api
-      - redis
+      postgres:
+        condition: service_healthy
+      whisper-server:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - youtube_network
 
   stt-worker-2:
     build:
       context: .
       dockerfile: services/data-processor/Dockerfile
-    container_name: youtube_stt_worker_2
+    container_name: youtube_stt_worker_2_gpu
     environment:
       - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
       - WHISPER_SERVER_URL=http://whisper-server:8082
@@ -217,25 +157,33 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - REDIS_URL=redis://redis:6379
       - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=GPU
+      - FORCE_GPU_MODE=true
     volumes:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/stt_worker.py
+    command: sh -c "sleep 5 && /app/services/data-processor/wait_for_whisper.sh && python /app/services/data-processor/stt_worker.py"
     depends_on:
-      - postgres
-      - whisper-server
-      - stt-cost-api
-      - redis
+      postgres:
+        condition: service_healthy
+      whisper-server:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - youtube_network
 
   stt-worker-3:
     build:
       context: .
       dockerfile: services/data-processor/Dockerfile
-    container_name: youtube_stt_worker_3
+    container_name: youtube_stt_worker_3_gpu
     environment:
       - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
       - WHISPER_SERVER_URL=http://whisper-server:8082
@@ -243,21 +191,29 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - REDIS_URL=redis://redis:6379
       - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=GPU
+      - FORCE_GPU_MODE=true
     volumes:
       - ./src:/app/src
       - ./shared:/app/shared
       - ./services/data-processor:/app/services/data-processor
       - ./data:/app/data
       - /tmp:/tmp
-    command: python /app/services/data-processor/stt_worker.py
+    command: sh -c "sleep 10 && /app/services/data-processor/wait_for_whisper.sh && python /app/services/data-processor/stt_worker.py"
     depends_on:
-      - postgres
-      - whisper-server
-      - stt-cost-api
-      - redis
+      postgres:
+        condition: service_healthy
+      whisper-server:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
+    networks:
+      - youtube_network
 
-  # Vectorization Workers (Scaled Out)
+  # Vectorization Workers (공통)
   vectorize-worker-1:
     build:
       context: .
@@ -277,15 +233,20 @@ services:
       - ./services/data-processor:/app/services/data-processor
     command: python /app/services/data-processor/vectorize_worker.py
     depends_on:
-      - postgres
-      - qdrant
-      - embedding-server
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      embedding-server:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - youtube_network
 
   vectorize-worker-2:
     build:
@@ -306,15 +267,20 @@ services:
       - ./services/data-processor:/app/services/data-processor
     command: python /app/services/data-processor/vectorize_worker.py
     depends_on:
-      - postgres
-      - qdrant
-      - embedding-server
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      embedding-server:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - youtube_network
 
   vectorize-worker-3:
     build:
@@ -335,105 +301,21 @@ services:
       - ./services/data-processor:/app/services/data-processor
     command: python /app/services/data-processor/vectorize_worker.py
     depends_on:
-      - postgres
-      - qdrant
-      - embedding-server
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      embedding-server:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Monitoring Dashboard
-  monitoring-dashboard:
-    build:
-      context: .
-      dockerfile: services/data-processor/Dockerfile
-    container_name: youtube_monitoring
-    environment:
-      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
-    ports:
-      - "8081:8081"
-    volumes:
-      - ./src:/app/src
-      - ./shared:/app/shared
-      - ./services/data-processor:/app/services/data-processor
-    command: python /app/services/data-processor/monitoring_api.py
-    depends_on:
-      - postgres
-    restart: unless-stopped
-
-  # Agent Service
-  agent-service:
-    build:
-      context: .
-      dockerfile: services/agent-service/Dockerfile
-    container_name: youtube_agent_service
-    environment:
-      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
-      - QDRANT_URL=http://qdrant:6333
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - EMBEDDING_SERVER_URL=http://embedding-server:8083
-    ports:
-      - "8000:8000"
-    depends_on:
-      - postgres
-      - qdrant
-      - embedding-server
-    restart: unless-stopped
-
-  # UI Service (OpenWebUI)
-  ui-service:
-    build:
-      context: .
-      dockerfile: services/ui-service/Dockerfile
-    container_name: youtube_ui
-    environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - OPENAI_API_BASE_URL=http://agent-service:8000/v1
-      - OPENAI_API_KEY=dummy-key
-      - AIOHTTP_CLIENT_TIMEOUT=120
-      - REQUEST_TIMEOUT=120
-      - OPENAI_API_REQUEST_TIMEOUT=120
-      - DEFAULT_MODELS=youtube-agent
-      - ENABLE_OAUTH_SIGNUP=false
-      - ENABLE_RAG_WEB_SEARCH=false
-    ports:
-      - "3000:8080"
-    volumes:
-      - openwebui_data:/app/backend/data
-    depends_on:
-      - agent-service
-    restart: unless-stopped
-
-  # Admin Dashboard (통합 관리 페이지)
-  admin-dashboard:
-    build:
-      context: ./services/admin-dashboard
-      dockerfile: Dockerfile
-    container_name: youtube_admin_dashboard
-    environment:
-      - AGENT_API_URL=http://agent-service:8000
-      - MONITORING_URL=http://localhost:8081
-    ports:
-      - "8090:8090"
-    volumes:
-      - ./services/admin-dashboard:/app
-    depends_on:
-      - agent-service
-    restart: unless-stopped
-
-volumes:
-  postgres_data:
-    driver: local
-  redis_data:
-    driver: local
-  qdrant_data:
-    driver: local
-  openwebui_data:
-    driver: local
+    networks:
+      - youtube_network
 
 networks:
-  default:
-    name: youtube_network
+  youtube_network:
+    external: true

@@ -46,6 +46,8 @@ class Content(Base):
     is_podcast = Column(Boolean, default=False)  # 팟캐스트 여부
     processed_at = Column(DateTime)
     vector_stored = Column(Boolean, default=False)
+    is_active = Column(Boolean, default=True)  # Soft delete
+    deleted_at = Column(DateTime)  # Soft delete timestamp
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 

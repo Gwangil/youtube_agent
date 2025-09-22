@@ -46,12 +46,17 @@ class ImprovedSTTWorkerWithCost:
         self.whisper_server_url = os.getenv('WHISPER_SERVER_URL', 'http://whisper-server:8082')
 
         # OpenAI API 사용 옵션
+        self.force_openai_api = os.getenv('FORCE_OPENAI_API', 'false').lower() == 'true'
         self.enable_openai_fallback = os.getenv('ENABLE_OPENAI_STT_FALLBACK', 'true').lower() == 'true'
         self.auto_approve_fallback = os.getenv('AUTO_APPROVE_STT_FALLBACK', 'false').lower() == 'true'
 
-        print(f"🚀 개선된 STT 워커 #{worker_id} 초기화 (비용 관리 활성화)")
-        print(f"  Whisper 서버: {self.whisper_server_url}")
-        print(f"  OpenAI 폴백: {'활성화' if self.enable_openai_fallback else '비활성화'}")
+        if self.force_openai_api:
+            print(f"☁️ OpenAI API STT 워커 #{worker_id} 초기화 (CPU 모드)")
+            print(f"  처리 모드: OpenAI Whisper API 전용")
+        else:
+            print(f"🚀 개선된 STT 워커 #{worker_id} 초기화 (비용 관리 활성화)")
+            print(f"  Whisper 서버: {self.whisper_server_url}")
+            print(f"  OpenAI 폴백: {'활성화' if self.enable_openai_fallback else '비활성화'}")
         print(f"  자동 승인: {'활성화' if self.auto_approve_fallback else '비활성화'}")
 
         # 비용 요약 출력
@@ -65,8 +70,12 @@ class ImprovedSTTWorkerWithCost:
 
     def _check_whisper_server(self) -> bool:
         """Whisper 서버 상태 확인"""
+        # OpenAI API 강제 사용 모드인 경우
+        if self.force_openai_api:
+            return False
+
         try:
-            response = requests.get(f"{self.whisper_server_url}/health", timeout=5)
+            response = requests.get(f"{self.whisper_server_url}/health", timeout=30)
             if response.status_code == 200:
                 info = response.json()
                 device = info.get('device', 'unknown')

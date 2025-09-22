@@ -1,0 +1,340 @@
+# CPU 기반 처리 서비스 (OpenAI API 전용)
+# 사용: docker-compose -f docker-compose.yml -f docker-compose.cpu.yml up -d
+
+services:
+  # OpenAI Embedding Server (CPU)
+  embedding-server-openai:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_embedding_server_openai
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_PORT=8083
+      - EMBEDDING_MODEL=OPENAI
+      - USE_OPENAI_EMBEDDINGS=true
+    ports:
+      - "8083:8083"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/embedding_server_wrapper.py
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # Data Processing Service (CPU/OpenAI 모드)
+  data-processor:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_data_processor_cpu
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - REDIS_URL=redis://redis:6379
+      - QDRANT_URL=http://qdrant:6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server-openai:8083
+      - PROCESSING_MODE=CPU
+      - USE_OPENAI_API=true
+    volumes:
+      - ./data:/app/data
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/app.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      embedding-server-openai:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # STT Workers (OpenAI API 전용)
+  stt-worker-openai-1:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_1_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - STT_WORKER_ID=0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=CPU
+      - USE_OPENAI_API=true
+      - FORCE_OPENAI_API=true
+      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/stt_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  stt-worker-openai-2:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_2_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - STT_WORKER_ID=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=CPU
+      - USE_OPENAI_API=true
+      - FORCE_OPENAI_API=true
+      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/stt_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  stt-worker-openai-3:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_3_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - STT_WORKER_ID=2
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=CPU
+      - USE_OPENAI_API=true
+      - FORCE_OPENAI_API=true
+      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/stt_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # STT Workers (OpenAI API, 더 많은 병렬 처리)
+  stt-worker-openai-4:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_4_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - STT_WORKER_ID=3
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=CPU
+      - USE_OPENAI_API=true
+      - FORCE_OPENAI_API=true
+      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/stt_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  stt-worker-openai-5:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_stt_worker_5_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - STT_WORKER_ID=4
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - STT_COST_API_URL=http://stt-cost-api:8084
+      - PROCESSING_MODE=CPU
+      - USE_OPENAI_API=true
+      - FORCE_OPENAI_API=true
+      - STT_AUTO_APPROVE_THRESHOLD=${STT_AUTO_APPROVE_THRESHOLD:-0.10}
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+      - ./data:/app/data
+      - /tmp:/tmp
+    command: python /app/services/data-processor/stt_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      stt-cost-api:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - youtube_network
+
+  # Vectorization Workers (OpenAI Embeddings)
+  vectorize-worker-1:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_vectorize_worker_1_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server-openai:8083
+      - VECTORIZE_WORKER_ID=0
+      - TOTAL_VECTORIZE_WORKERS=3
+      - USE_OPENAI_EMBEDDINGS=true
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/vectorize_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      embedding-server-openai:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - youtube_network
+
+  vectorize-worker-2:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_vectorize_worker_2_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server-openai:8083
+      - VECTORIZE_WORKER_ID=1
+      - TOTAL_VECTORIZE_WORKERS=3
+      - USE_OPENAI_EMBEDDINGS=true
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/vectorize_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      embedding-server-openai:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - youtube_network
+
+  vectorize-worker-3:
+    build:
+      context: .
+      dockerfile: services/data-processor/Dockerfile
+    container_name: youtube_vectorize_worker_3_openai
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBEDDING_SERVER_URL=http://embedding-server-openai:8083
+      - VECTORIZE_WORKER_ID=2
+      - TOTAL_VECTORIZE_WORKERS=3
+      - USE_OPENAI_EMBEDDINGS=true
+    volumes:
+      - ./src:/app/src
+      - ./shared:/app/shared
+      - ./services/data-processor:/app/services/data-processor
+    command: python /app/services/data-processor/vectorize_worker.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      embedding-server-openai:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - youtube_network
+
+networks:
+  youtube_network:
+    external: true

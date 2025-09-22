@@ -64,11 +64,25 @@ class CostEstimate(BaseModel):
 # API 엔드포인트들
 @app.get("/")
 async def root():
-    """API 상태 확인"""
+    """대시보드로 리다이렉트"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/dashboard", status_code=302)
+
+
+@app.get("/api")
+async def api_info():
+    """API 정보"""
     return {
         "service": "STT Cost Management API",
         "status": "running",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
+        "endpoints": {
+            "/dashboard": "Web UI Dashboard",
+            "/docs": "Swagger API Documentation",
+            "/api/cost/summary": "Cost summary",
+            "/api/approvals/pending": "Pending approvals",
+            "/api/cost/settings": "Cost settings"
+        }
     }
 
 

@@ -145,10 +145,114 @@ async def monitoring_page(request: Request):
 @app.get("/api-docs", response_class=HTMLResponse)
 async def api_docs_page(request: Request):
     """API 문서 페이지"""
+    # 브라우저에서 접근 가능한 URL 사용
+    browser_api_url = "http://localhost:8000"
     return templates.TemplateResponse("api_docs.html", {
         "request": request,
-        "api_url": AGENT_API_URL
+        "api_url": browser_api_url
     })
+
+
+@app.get("/contents", response_class=HTMLResponse)
+async def contents_page(
+    request: Request,
+    channel_id: Optional[int] = None,
+    status: str = "all",
+    page: int = 1,
+    sort_by: str = "created_at",
+    sort_order: str = "desc"
+):
+    """콘텐츠 관리 페이지"""
+    try:
+        # 채널 목록 가져오기
+        async with httpx.AsyncClient() as client:
+            channels_response = await client.get(f"{AGENT_API_URL}/channels")
+            channels = channels_response.json()
+
+            # 콘텐츠 가져오기
+            params = {
+                "page": page,
+                "page_size": 50,
+                "sort_by": sort_by,
+                "sort_order": sort_order
+            }
+            if channel_id:
+                params["channel_id"] = channel_id
+            if status != "all":
+                params["is_active"] = status == "active"
+
+            contents_response = await client.get(f"{AGENT_API_URL}/api/contents", params=params)
+            contents_data = contents_response.json()
+
+    except httpx.RequestError as e:
+        contents_data = {"contents": [], "total": 0, "pages": 1}
+        channels = []
+
+    contents = contents_data.get("contents", [])
+    active_count = sum(1 for c in contents if c.get("is_active", True))
+    inactive_count = len(contents) - active_count
+
+    return templates.TemplateResponse("contents.html", {
+        "request": request,
+        "channels": channels,
+        "contents": contents,
+        "selected_channel_id": channel_id,
+        "status_filter": status,
+        "current_page": page,
+        "total_pages": contents_data.get("pages", 1),
+        "active_count": active_count,
+        "inactive_count": inactive_count,
+        "sort_by": sort_by,
+        "sort_order": sort_order
+    })
+
+
+@app.post("/contents/{content_id}/toggle")
+async def toggle_content(content_id: int):
+    """콘텐츠 활성/비활성 토글"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{AGENT_API_URL}/api/contents/{content_id}/toggle")
+            if response.status_code not in [200, 204]:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return RedirectResponse(url="/contents", status_code=303)
+
+
+@app.post("/contents/bulk-toggle")
+async def bulk_toggle_contents(
+    content_ids: list[int] = Form(...),
+    is_active: bool = Form(...)
+):
+    """여러 콘텐츠 일괄 활성/비활성"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{AGENT_API_URL}/api/contents/bulk-toggle",
+                json={"content_ids": content_ids, "is_active": is_active}
+            )
+            if response.status_code not in [200, 204]:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "ok", "count": len(content_ids)}
+
+
+@app.post("/contents/{content_id}/reprocess")
+async def reprocess_content(content_id: int):
+    """콘텐츠 재처리"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{AGENT_API_URL}/api/contents/{content_id}/reprocess")
+            if response.status_code not in [200, 204]:
+                raise HTTPException(status_code=response.status_code, detail=response.text)
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

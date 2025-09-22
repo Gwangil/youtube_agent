@@ -77,6 +77,32 @@ async def dashboard():
             .btn-success { background: #28a745; }
             .btn-success:hover { background: #218838; }
             .refresh { float: right; font-size: 0.8em; color: #666; }
+
+            /* 콘텐츠 목록 스타일 추가 */
+            .content-table { width: 100%; border-collapse: collapse; }
+            .content-table th { background: #007bff; color: white; padding: 10px; text-align: left; cursor: pointer; position: relative; }
+            .content-table th:hover { background: #0056b3; }
+            .content-table th.sortable::after { content: ' ⇅'; opacity: 0.5; }
+            .content-table th.sorted-asc::after { content: ' ↑'; opacity: 1; }
+            .content-table th.sorted-desc::after { content: ' ↓'; opacity: 1; }
+            .content-table td { padding: 8px; border-bottom: 1px solid #dee2e6; }
+            .content-table tr:hover { background: #f8f9fa; }
+            .stage-completed { color: #28a745; font-weight: bold; }
+            .stage-processing { color: #007bff; font-weight: bold; }
+            .stage-waiting { color: #ffc107; }
+            .stage-failed { color: #dc3545; font-weight: bold; }
+            .content-stats { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 20px; }
+            .content-stat-item { text-align: center; padding: 10px; background: #f8f9fa; border-radius: 6px; }
+            .content-stat-number { font-size: 1.5em; font-weight: bold; }
+            .content-stat-label { font-size: 0.9em; color: #666; }
+
+            /* 페이징 스타일 */
+            .pagination { display: flex; justify-content: center; align-items: center; gap: 10px; margin: 20px 0; }
+            .pagination button { padding: 8px 12px; border: 1px solid #007bff; background: white; color: #007bff; border-radius: 4px; cursor: pointer; }
+            .pagination button:hover:not(:disabled) { background: #007bff; color: white; }
+            .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+            .pagination .page-info { padding: 8px 12px; background: #f8f9fa; border-radius: 4px; }
+            .page-size-selector { margin-left: 10px; padding: 5px; border-radius: 4px; border: 1px solid #dee2e6; }
         </style>
     </head>
     <body>
@@ -115,6 +141,44 @@ async def dashboard():
             </div>
 
             <div class="card">
+                <h2>📚 콘텐츠 목록</h2>
+                <div class="content-stats" id="content-stats">
+                    <!-- 콘텐츠 통계가 여기에 동적으로 로드됩니다 -->
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label>페이지당 항목:
+                        <select id="page-size" class="page-size-selector" onchange="changePageSize()">
+                            <option value="10">10개</option>
+                            <option value="20" selected>20개</option>
+                            <option value="50">50개</option>
+                            <option value="100">100개</option>
+                        </select>
+                    </label>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table class="content-table">
+                        <thead>
+                            <tr>
+                                <th class="sortable" data-column="channel" onclick="sortTable('channel')">채널</th>
+                                <th class="sortable" data-column="title" onclick="sortTable('title')">제목</th>
+                                <th class="sortable" data-column="created_at" onclick="sortTable('created_at')">업로드 일자</th>
+                                <th>처리 단계</th>
+                                <th>트랜스크립트</th>
+                                <th>벡터</th>
+                                <th class="sortable" data-column="duration" onclick="sortTable('duration')">길이(분)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="content-list">
+                            <!-- 콘텐츠 목록이 여기에 동적으로 로드됩니다 -->
+                        </tbody>
+                    </table>
+                </div>
+                <div class="pagination" id="pagination">
+                    <!-- 페이징 컨트롤이 여기에 동적으로 로드됩니다 -->
+                </div>
+            </div>
+
+            <div class="card">
                 <h2>🎛️ 제어판</h2>
                 <div class="controls">
                     <button class="btn btn-success" onclick="enableCollection()">📥 수집 활성화</button>
@@ -127,6 +191,77 @@ async def dashboard():
 
         <script>
             let countdown = 10;
+            let currentPage = 1;
+            let pageSize = 20;
+            let sortBy = 'created_at';
+            let sortOrder = 'desc';
+
+            async function loadContent(resetTimer = false) {
+                try {
+                    const params = new URLSearchParams({
+                        page: currentPage,
+                        page_size: pageSize,
+                        sort_by: sortBy,
+                        sort_order: sortOrder
+                    });
+                    const response = await fetch(`/api/content?${params}`);
+                    const data = await response.json();
+
+                    // 콘텐츠 통계 업데이트
+                    const stats = data.statistics;
+                    document.getElementById('content-stats').innerHTML = `
+                        <div class="content-stat-item">
+                            <div class="content-stat-number">${stats.total}</div>
+                            <div class="content-stat-label">총 콘텐츠</div>
+                        </div>
+                        <div class="content-stat-item">
+                            <div class="content-stat-number stage-completed">${stats.completed}</div>
+                            <div class="content-stat-label">완료</div>
+                        </div>
+                        <div class="content-stat-item">
+                            <div class="content-stat-number stage-processing">${stats.processing}</div>
+                            <div class="content-stat-label">처리 중</div>
+                        </div>
+                        <div class="content-stat-item">
+                            <div class="content-stat-number stage-waiting">${stats.waiting}</div>
+                            <div class="content-stat-label">대기 중</div>
+                        </div>
+                        <div class="content-stat-item">
+                            <div class="content-stat-number stage-failed">${stats.failed}</div>
+                            <div class="content-stat-label">실패</div>
+                        </div>
+                    `;
+
+                    // 콘텐츠 목록 업데이트
+                    let contentHtml = '';
+                    data.contents.forEach(item => {
+                        let stageClass = '';
+                        if (item.processing_stage === '완료') stageClass = 'stage-completed';
+                        else if (item.processing_stage === '실패') stageClass = 'stage-failed';
+                        else if (item.processing_stage.includes('처리')) stageClass = 'stage-processing';
+                        else stageClass = 'stage-waiting';
+
+                        contentHtml += `
+                            <tr>
+                                <td>${item.channel}</td>
+                                <td title="${item.title}">${item.title.length > 50 ? item.title.substring(0, 50) + '...' : item.title}</td>
+                                <td>${item.created_at ? new Date(item.created_at).toLocaleDateString('ko-KR') : '-'}</td>
+                                <td class="${stageClass}">${item.processing_stage}</td>
+                                <td>${item.transcript_count}</td>
+                                <td>${item.vector_count}</td>
+                                <td>${item.duration_min ? item.duration_min.toFixed(1) : '-'}</td>
+                            </tr>
+                        `;
+                    });
+                    document.getElementById('content-list').innerHTML = contentHtml || '<tr><td colspan="7" style="text-align: center;">콘텐츠가 없습니다</td></tr>';
+
+                    // 페이징 UI 업데이트
+                    updatePagination(data.pagination);
+
+                } catch (error) {
+                    console.error('콘텐츠 로드 실패:', error);
+                }
+            }
 
             async function loadStats() {
                 try {
@@ -202,8 +337,61 @@ async def dashboard():
                 }
             }
 
+            function updatePagination(pagination) {
+                let paginationHtml = '';
+
+                // 이전 페이지 버튼
+                paginationHtml += `<button onclick="goToPage(${pagination.current_page - 1})" ${!pagination.has_previous ? 'disabled' : ''}>이전</button>`;
+
+                // 페이지 정보
+                paginationHtml += `<span class="page-info">페이지 ${pagination.current_page} / ${pagination.total_pages} (총 ${pagination.total_items}개)</span>`;
+
+                // 다음 페이지 버튼
+                paginationHtml += `<button onclick="goToPage(${pagination.current_page + 1})" ${!pagination.has_next ? 'disabled' : ''}>다음</button>`;
+
+                document.getElementById('pagination').innerHTML = paginationHtml;
+            }
+
+            function goToPage(page) {
+                currentPage = page;
+                loadContent(true);
+                countdown = 10;
+            }
+
+            function changePageSize() {
+                pageSize = parseInt(document.getElementById('page-size').value);
+                currentPage = 1;  // 페이지 크기 변경시 첫 페이지로
+                loadContent(true);
+                countdown = 10;
+            }
+
+            function sortTable(column) {
+                // 같은 컬럼을 다시 클릭하면 정렬 순서 반대로
+                if (sortBy === column) {
+                    sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+                } else {
+                    sortBy = column;
+                    sortOrder = 'desc';  // 새 컬럼 선택시 기본 내림차순
+                }
+
+                // 헤더 스타일 업데이트
+                document.querySelectorAll('.content-table th').forEach(th => {
+                    th.classList.remove('sorted-asc', 'sorted-desc');
+                });
+
+                const selectedTh = document.querySelector(`th[data-column="${column}"]`);
+                if (selectedTh) {
+                    selectedTh.classList.add(sortOrder === 'asc' ? 'sorted-asc' : 'sorted-desc');
+                }
+
+                currentPage = 1;  // 정렬 변경시 첫 페이지로
+                loadContent(true);
+                countdown = 10;
+            }
+
             function refreshData() {
                 loadStats();
+                loadContent();
                 countdown = 10;
             }
 
@@ -250,6 +438,7 @@ async def dashboard():
 
             // 초기 데이터 로드
             loadStats();
+            loadContent();
         </script>
     </body>
     </html>
@@ -261,9 +450,10 @@ async def get_stats():
     """실시간 처리 통계 API"""
     db = get_db()
     try:
-        # 기본 통계
+        # 기본 통계 (Content 테이블 기준 - 실제 상태)
         content_total = db.query(Content).count()
         stt_completed = db.query(Content).filter(Content.transcript_available == True).count()
+        vector_completed = db.query(Content).filter(Content.vector_stored == True).count()
 
         # 트랜스크립트 세그먼트 수
         transcript_segments = db.query(Transcript).count()
@@ -276,14 +466,8 @@ async def get_stats():
         except:
             vectorized_count = 0
 
-        # 벡터화 완료된 콘텐츠 수 (작업 기준)
-        vectorized_contents = db.query(ProcessingJob).filter(
-            ProcessingJob.job_type == 'vectorize',
-            ProcessingJob.status == 'completed'
-        ).count()
-
-        # 지식화 진행률
-        knowledge_progress = (vectorized_contents / content_total * 100) if content_total > 0 else 0
+        # 지식화 진행률 (vector_stored 기준)
+        knowledge_progress = (vector_completed / content_total * 100) if content_total > 0 else 0
 
         # 작업 상태별 카운트
         job_status = {}
@@ -352,7 +536,7 @@ async def get_stats():
         return {
             "content_total": content_total,
             "stt_completed": stt_completed,
-            "vectorized": vectorized_contents,
+            "vectorized": vector_completed,  # Content 테이블 기준으로 통일
             "vectors_in_qdrant": vectorized_count,
             "transcript_segments": transcript_segments,
             "knowledge_progress": knowledge_progress,
@@ -405,24 +589,156 @@ async def force_vectorization():
         db.close()
 
 @app.get("/api/content")
-async def get_content_list():
-    """콘텐츠 목록 조회"""
+async def get_content_list(
+    page: int = 1,
+    page_size: int = 20,
+    sort_by: str = "created_at",
+    sort_order: str = "desc"
+):
+    """콘텐츠 목록 조회 (처리 상태 포함, 페이징 및 정렬 지원)"""
     db = get_db()
     try:
-        contents = db.query(Content).order_by(Content.created_at.desc()).limit(50).all()
+        # 전체 통계를 위한 쿼리
+        total_content_count = db.query(Content).count()
+        all_contents_for_stats = db.query(Content).all()
+
+        # 정렬 처리
+        query = db.query(Content)
+        if sort_by == "title":
+            order_column = Content.title
+        elif sort_by == "duration":
+            order_column = Content.duration
+        elif sort_by == "channel":
+            # 채널명으로 정렬하려면 조인 필요
+            query = query.join(Channel)
+            order_column = Channel.name
+        else:  # 기본값: created_at
+            order_column = Content.created_at
+
+        if sort_order == "asc":
+            query = query.order_by(order_column.asc())
+        else:
+            query = query.order_by(order_column.desc())
+
+        # 페이징 처리
+        offset = (page - 1) * page_size
+        contents = query.offset(offset).limit(page_size).all()
+
+        # 총 페이지 수 계산
+        total_pages = (total_content_count + page_size - 1) // page_size
 
         result = []
+        stats_completed = 0
+        stats_processing = 0
+        stats_waiting = 0
+        stats_failed = 0
+
+        # 전체 콘텐츠의 통계 계산
+        for content in all_contents_for_stats:
+            # 트랜스크립트 상태 확인
+            transcript_count = db.query(Transcript).filter(
+                Transcript.content_id == content.id
+            ).count()
+
+            # 벡터 매핑 상태 확인
+            vector_count = db.query(VectorMapping).filter(
+                VectorMapping.content_id == content.id
+            ).count()
+
+            # 처리 작업 상태 확인
+            latest_job = db.query(ProcessingJob).filter(
+                ProcessingJob.content_id == content.id
+            ).order_by(ProcessingJob.created_at.desc()).first()
+
+            # 처리 단계 결정 (통계용)
+            if content.vector_stored and vector_count > 0:
+                stats_completed += 1
+            elif content.transcript_available and transcript_count > 0:
+                stats_waiting += 1
+            elif latest_job:
+                if latest_job.status == "processing":
+                    stats_processing += 1
+                elif latest_job.status == "failed":
+                    stats_failed += 1
+                else:
+                    stats_waiting += 1
+            else:
+                stats_waiting += 1
+
+        # 표시용 콘텐츠 처리 (최근 100개)
         for content in contents:
+            # 트랜스크립트 상태 확인
+            transcript_count = db.query(Transcript).filter(
+                Transcript.content_id == content.id
+            ).count()
+
+            # 벡터 매핑 상태 확인
+            vector_count = db.query(VectorMapping).filter(
+                VectorMapping.content_id == content.id
+            ).count()
+
+            # 처리 작업 상태 확인
+            latest_job = db.query(ProcessingJob).filter(
+                ProcessingJob.content_id == content.id
+            ).order_by(ProcessingJob.created_at.desc()).first()
+
+            # 처리 단계 결정 (표시용)
+            processing_stage = "대기중"
+            if content.vector_stored and vector_count > 0:
+                processing_stage = "완료"
+            elif content.transcript_available and transcript_count > 0:
+                processing_stage = "벡터화 대기"
+            elif latest_job:
+                if latest_job.status == "processing":
+                    processing_stage = "STT 처리중"
+                elif latest_job.status == "completed":
+                    processing_stage = "벡터화 대기"
+                elif latest_job.status == "failed":
+                    processing_stage = "실패"
+
+            # 채널 정보
+            channel = db.query(Channel).filter(Channel.id == content.channel_id).first()
+
             result.append({
                 "id": content.id,
-                "title": content.title[:100],
+                "title": content.title[:80] if content.title else "제목 없음",
+                "channel": channel.name if channel else "Unknown",
                 "duration": content.duration,
+                "duration_min": round(content.duration / 60, 1) if content.duration else 0,
                 "transcript_available": content.transcript_available,
+                "transcript_count": transcript_count,
                 "vector_stored": content.vector_stored,
-                "created_at": content.created_at.isoformat() if content.created_at else None
+                "vector_count": vector_count,
+                "processing_stage": processing_stage,
+                "job_status": latest_job.status if latest_job else None,
+                "created_at": content.created_at.isoformat() if content.created_at else None,
+                "url": content.url
             })
 
-        return {"contents": result}
+        # 전체 통계 정보 (모든 콘텐츠 기준)
+        return {
+            "statistics": {
+                "total": total_content_count,
+                "completed": stats_completed,
+                "processing": stats_processing,
+                "waiting": stats_waiting,
+                "failed": stats_failed,
+                "completion_rate": round((stats_completed / total_content_count * 100) if total_content_count > 0 else 0, 1)
+            },
+            "pagination": {
+                "current_page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "total_items": total_content_count,
+                "has_next": page < total_pages,
+                "has_previous": page > 1
+            },
+            "sorting": {
+                "sort_by": sort_by,
+                "sort_order": sort_order
+            },
+            "contents": result
+        }
 
     finally:
         db.close()
