@@ -32,26 +32,56 @@
 
 ## 🐳 Docker 서비스 구성
 
-### 실행 방법 (모드별 분리 구성)
+### 🚀 초기 구축 및 실행
 ```bash
-# 환경 자동 감지 후 실행
+# 1. 저장소 클론
+git clone https://github.com/your-org/youtube_agent.git
+cd youtube_agent
+
+# 2. 환경변수 설정
+cp .env.example .env
+# .env 파일 편집하여 OPENAI_API_KEY 등 설정
+
+# 3. 자동 실행 (환경 감지 후 최적 모드 선택)
 ./start.sh
 
-# GPU 모드 강제 실행
-./start_gpu.sh
-# 또는
-docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml up -d
+# 또는 수동 모드 선택
+./start_gpu.sh   # GPU 환경 (Whisper Large-v3)
+./start_cpu.sh   # CPU 환경 (OpenAI API)
+```
 
-# CPU 모드 강제 실행 (OpenAI API)
-./start_cpu.sh
+### ⚙️ 서비스 제어 명령
+```bash
+# === 안전한 서비스 관리 ===
+# 처리 중인 작업 완료 후 안전하게 종료
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml stop
 # 또는
-docker-compose -f docker-compose.base.yml -f docker-compose.cpu.yml up -d
+docker-compose -f docker-compose.base.yml -f docker-compose.cpu.yml stop
 
+# 서비스 재시작 (설정 변경 적용)
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml restart
+
+# === 전체 시스템 관리 ===
+# 완전 종료 (컨테이너 제거)
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml down
+
+# 완전 종료 + 볼륨 제거 (데이터 초기화)
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml down -v
+
+# 고아 컨테이너 정리
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml down --remove-orphans
+
+# === 개별 서비스 제어 ===
 # 개별 서비스 재시작
 docker restart youtube_agent_service      # RAG 에이전트 (포트: 8000)
 docker restart youtube_data_processor     # 데이터 처리
 docker restart youtube_data_collector     # 데이터 수집
 docker restart youtube_admin_dashboard    # 관리 대시보드 (포트: 8090)
+docker restart youtube_whisper_server     # Whisper GPU 서버
+
+# 서비스 로그 확인
+docker logs youtube_agent_service --tail 50 -f
+docker logs youtube_stt_worker_1_gpu --tail 50 -f
 ```
 
 ### 서비스 구성 (모드에 따라 다름)
@@ -443,23 +473,40 @@ docker exec youtube_data_processor python -m memory_profiler app.py
 
 ## 🛠️ 서비스 운영 가이드
 
-### 서비스 제어 명령
+### Makefile 명령어 (권장)
 ```bash
-# 일시 정지/재개 (메모리 유지)
-make pause     # CPU 사용만 중단
-make unpause   # 일시 정지 해제
+# === 기본 제어 ===
+make start          # 환경 자동 감지 후 시작
+make start-gpu      # GPU 모드 강제 시작
+make start-cpu      # CPU 모드 강제 시작
+make stop           # 서비스 중지
+make restart        # 서비스 재시작
 
-# 정지/시작 (컨테이너 유지)
-make stop      # 프로세스 종료
-make start     # 프로세스 시작
+# === 모니터링 ===
+make status         # 서비스 상태 확인
+make logs           # 전체 로그 확인
+make logs-stt       # STT 워커 로그만 확인
 
-# 안전한 정지/시작 (데이터 무결성)
-make safe-stop   # 처리 중인 작업 대기 후 정지
-make safe-start  # stuck 작업 정리 후 시작
+# === 데이터 관리 ===
+make db-backup      # PostgreSQL 백업
+make db-restore FILE=backups/backup.sql  # 복원
+make clean-data     # 데이터 정리
+```
 
-# 완전 종료/시작 (컨테이너 재생성)
-make down      # 컨테이너 제거
-make up        # 컨테이너 생성
+### 안전한 종료 절차
+```bash
+# 1. 현재 처리 중인 작업 확인
+docker exec youtube_postgres psql -U youtube_user -d youtube_agent -c \
+  "SELECT COUNT(*) FROM processing_jobs WHERE status='processing';"
+
+# 2. 처리 완료 대기 후 안전한 종료
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml stop
+
+# 3. 데이터 백업 (선택사항)
+make db-backup
+
+# 4. 완전 종료
+make stop
 ```
 
 ### 데이터 무결성 관리

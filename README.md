@@ -117,19 +117,60 @@ RAG 검색 가능
 
 ## 🛠️ 관리 명령어
 
-### 서비스 관리
+### 안전한 서비스 관리
 ```bash
+# === 안전한 종료 (처리 중인 작업 완료 대기) ===
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml stop
+# 또는
+docker-compose -f docker-compose.base.yml -f docker-compose.cpu.yml stop
+
+# === 서비스 재시작 ===
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml restart
+
+# === 완전 종료 ===
+# 컨테이너만 제거 (데이터 유지)
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml down
+
+# 컨테이너와 데이터 모두 제거 (초기화)
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml down -v
+
+# 고아 컨테이너 정리
+docker-compose -f docker-compose.base.yml -f docker-compose.gpu.yml down --remove-orphans
+```
+
+### 개별 서비스 제어
+```bash
+# 주요 서비스 재시작
+docker restart youtube_agent_service      # RAG 에이전트
+docker restart youtube_data_processor     # 데이터 처리
+docker restart youtube_whisper_server     # GPU STT 서버
+docker restart youtube_admin_dashboard    # 관리 대시보드
+
 # 로그 확인
-docker-compose -f docker-compose.base.yml -f docker-compose.[gpu|cpu].yml logs -f [service]
+docker logs [container_name] --tail 50 -f
 
-# 서비스 재시작
-docker restart [container_name]
-
-# 전체 중지
-docker-compose -f docker-compose.base.yml -f docker-compose.[gpu|cpu].yml down
+# 실시간 상태 모니터링
+docker stats --no-stream
 
 # 오래된 컨테이너 정리
 ./scripts/cleanup_old_containers.sh
+```
+
+### 데이터 백업 및 복구
+```bash
+# === PostgreSQL 백업 ===
+docker exec youtube_postgres pg_dump -U youtube_user -d youtube_agent > backup_$(date +%Y%m%d).sql
+
+# === PostgreSQL 복구 ===
+docker exec -i youtube_postgres psql -U youtube_user -d youtube_agent < backup_20250923.sql
+
+# === Qdrant 백업 ===
+docker exec youtube_qdrant tar -czf /tmp/qdrant_backup.tar.gz /qdrant/storage
+docker cp youtube_qdrant:/tmp/qdrant_backup.tar.gz ./qdrant_backup_$(date +%Y%m%d).tar.gz
+
+# === 전체 볼륨 백업 ===
+docker run --rm -v youtube_agent_postgres_data:/data -v $(pwd):/backup alpine tar -czf /backup/postgres_data_$(date +%Y%m%d).tar.gz -C /data .
+docker run --rm -v youtube_agent_qdrant_data:/data -v $(pwd):/backup alpine tar -czf /backup/qdrant_data_$(date +%Y%m%d).tar.gz -C /data .
 
 # 고아 컨테이너 정리
 docker-compose -f docker-compose.base.yml -f docker-compose.[gpu|cpu].yml down --remove-orphans
