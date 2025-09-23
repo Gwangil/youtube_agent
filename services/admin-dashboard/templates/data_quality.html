@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>데이터 품질 관리</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .navbar { background-color: #2c3e50; }
+        .navbar-brand, .nav-link { color: white !important; }
+        .stat-card {
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stat-card h3 { color: #2c3e50; }
+        .status-good { color: #27ae60; font-weight: bold; }
+        .status-warning { color: #f39c12; font-weight: bold; }
+        .status-error { color: #e74c3c; font-weight: bold; }
+        .progress { height: 25px; }
+        .issue-item {
+            background: #f8f9fa;
+            border-left: 4px solid #e74c3c;
+            padding: 10px;
+            margin: 10px 0;
+        }
+        .recommendation {
+            background: #e8f6f3;
+            border-left: 4px solid #27ae60;
+            padding: 10px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <i class="fas fa-play-circle"></i> YouTube Agent 관리
+            </a>
+            <div class="navbar-nav ms-auto">
+                <a class="nav-link" href="/channels">채널 관리</a>
+                <a class="nav-link" href="/contents">콘텐츠 관리</a>
+                <a class="nav-link" href="/monitoring">모니터링</a>
+                <a class="nav-link active" href="/data-quality">품질 관리</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mt-4">
+        <h2 class="mb-4">📊 데이터 품질 관리</h2>
+
+        <!-- 정합성 요약 -->
+        <div class="row">
+            <div class="col-md-3">
+                <div class="stat-card bg-primary text-white">
+                    <h4>전체 콘텐츠</h4>
+                    <h2 id="total-content">-</h2>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card bg-success text-white">
+                    <h4>정상 데이터</h4>
+                    <h2 id="healthy-data">-</h2>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card bg-warning text-white">
+                    <h4>불일치 데이터</h4>
+                    <h2 id="mismatch-data">-</h2>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card bg-danger text-white">
+                    <h4>고아 데이터</h4>
+                    <h2 id="orphan-data">-</h2>
+                </div>
+            </div>
+        </div>
+
+        <!-- 정합성 체크 결과 -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5>🔍 정합성 체크 결과</h5>
+                <button class="btn btn-primary btn-sm float-end" onclick="runIntegrityCheck()">
+                    <i class="fas fa-sync"></i> 전체 체크 실행
+                </button>
+            </div>
+            <div class="card-body">
+                <div id="integrity-results">
+                    <p class="text-muted">체크 결과가 여기에 표시됩니다...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 문제 목록 -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-danger text-white">
+                        <h5>⚠️ 발견된 문제</h5>
+                    </div>
+                    <div class="card-body" id="issues-list">
+                        <p class="text-muted">문제를 검색 중...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-success text-white">
+                        <h5>💡 권장 조치</h5>
+                    </div>
+                    <div class="card-body" id="recommendations-list">
+                        <p class="text-muted">권장 사항 로딩 중...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 자동 수정 -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5>🔧 자동 수정</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <button class="btn btn-warning w-100" onclick="fixFlags()">
+                            <i class="fas fa-flag"></i> 플래그 수정
+                        </button>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-info w-100" onclick="restartStuckJobs()">
+                            <i class="fas fa-redo"></i> 멈춘 작업 재시작
+                        </button>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-danger w-100" onclick="cleanOrphans()">
+                            <i class="fas fa-trash"></i> 고아 데이터 정리
+                        </button>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-success w-100" onclick="runFullFix()">
+                            <i class="fas fa-magic"></i> 전체 자동 수정
+                        </button>
+                    </div>
+                </div>
+                <div id="fix-results" class="mt-3"></div>
+            </div>
+        </div>
+
+        <!-- 처리 통계 -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5>📈 처리 통계</h5>
+            </div>
+            <div class="card-body">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>항목</th>
+                            <th>전체</th>
+                            <th>완료</th>
+                            <th>대기</th>
+                            <th>실패</th>
+                            <th>진행률</th>
+                        </tr>
+                    </thead>
+                    <tbody id="stats-table">
+                        <tr><td colspan="6">로딩 중...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // 페이지 로드 시 데이터 로드
+        document.addEventListener('DOMContentLoaded', function() {
+            loadQualityData();
+            setInterval(loadQualityData, 30000); // 30초마다 자동 새로고침
+        });
+
+        async function loadQualityData() {
+            try {
+                const response = await fetch('/api/data-quality/status');
+                const data = await response.json();
+
+                // 요약 통계 업데이트
+                document.getElementById('total-content').textContent = data.total_content || 0;
+                document.getElementById('healthy-data').textContent = data.healthy_data || 0;
+                document.getElementById('mismatch-data').textContent = data.mismatch_data || 0;
+                document.getElementById('orphan-data').textContent = data.orphan_data || 0;
+
+                // 문제 목록 업데이트
+                updateIssuesList(data.issues || []);
+
+                // 권장 사항 업데이트
+                updateRecommendations(data.recommendations || []);
+
+                // 통계 테이블 업데이트
+                updateStatsTable(data.stats || {});
+
+            } catch (error) {
+                console.error('데이터 로드 실패:', error);
+            }
+        }
+
+        function updateIssuesList(issues) {
+            const container = document.getElementById('issues-list');
+            if (issues.length === 0) {
+                container.innerHTML = '<p class="text-success">✅ 발견된 문제가 없습니다!</p>';
+                return;
+            }
+
+            container.innerHTML = issues.map(issue => `
+                <div class="issue-item">
+                    <strong>${issue.type}</strong><br>
+                    <small>${issue.description}</small><br>
+                    <span class="badge bg-danger">${issue.count}개</span>
+                </div>
+            `).join('');
+        }
+
+        function updateRecommendations(recommendations) {
+            const container = document.getElementById('recommendations-list');
+            if (recommendations.length === 0) {
+                container.innerHTML = '<p class="text-muted">권장 사항이 없습니다.</p>';
+                return;
+            }
+
+            container.innerHTML = recommendations.map(rec => `
+                <div class="recommendation">
+                    <i class="fas fa-lightbulb text-warning"></i> ${rec}
+                </div>
+            `).join('');
+        }
+
+        function updateStatsTable(stats) {
+            const tbody = document.getElementById('stats-table');
+            tbody.innerHTML = `
+                <tr>
+                    <td>트랜스크립트</td>
+                    <td>${stats.transcript_total || 0}</td>
+                    <td>${stats.transcript_completed || 0}</td>
+                    <td>${stats.transcript_pending || 0}</td>
+                    <td>${stats.transcript_failed || 0}</td>
+                    <td>
+                        <div class="progress">
+                            <div class="progress-bar" style="width: ${stats.transcript_progress || 0}%">
+                                ${stats.transcript_progress || 0}%
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                <tr>
+                    <td>벡터화</td>
+                    <td>${stats.vector_total || 0}</td>
+                    <td>${stats.vector_completed || 0}</td>
+                    <td>${stats.vector_pending || 0}</td>
+                    <td>${stats.vector_failed || 0}</td>
+                    <td>
+                        <div class="progress">
+                            <div class="progress-bar bg-success" style="width: ${stats.vector_progress || 0}%">
+                                ${stats.vector_progress || 0}%
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+
+        async function runIntegrityCheck() {
+            if (!confirm('전체 정합성 체크를 실행하시겠습니까?')) return;
+
+            const resultDiv = document.getElementById('integrity-results');
+            resultDiv.innerHTML = '<div class="spinner-border"></div> 체크 중...';
+
+            try {
+                const response = await fetch('/api/data-quality/check', { method: 'POST' });
+                const result = await response.json();
+
+                resultDiv.innerHTML = `
+                    <div class="alert alert-info">
+                        <strong>체크 완료!</strong><br>
+                        - 검사한 콘텐츠: ${result.checked || 0}개<br>
+                        - 발견된 문제: ${result.issues_found || 0}개<br>
+                        - 자동 수정: ${result.auto_fixed || 0}개
+                    </div>
+                `;
+
+                // 데이터 새로고침
+                loadQualityData();
+
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="alert alert-danger">체크 실패: ${error.message}</div>`;
+            }
+        }
+
+        async function fixFlags() {
+            if (!confirm('플래그 불일치를 수정하시겠습니까?')) return;
+            await executeFix('fix-flags', '플래그 수정');
+        }
+
+        async function restartStuckJobs() {
+            if (!confirm('멈춘 작업을 재시작하시겠습니까?')) return;
+            await executeFix('restart-stuck', '작업 재시작');
+        }
+
+        async function cleanOrphans() {
+            if (!confirm('고아 데이터를 정리하시겠습니까?')) return;
+            await executeFix('clean-orphans', '고아 데이터 정리');
+        }
+
+        async function runFullFix() {
+            if (!confirm('모든 문제를 자동으로 수정하시겠습니까?')) return;
+            await executeFix('full-fix', '전체 자동 수정');
+        }
+
+        async function executeFix(action, description) {
+            const resultDiv = document.getElementById('fix-results');
+            resultDiv.innerHTML = `<div class="alert alert-info"><div class="spinner-border spinner-border-sm"></div> ${description} 중...</div>`;
+
+            try {
+                const response = await fetch(`/api/data-quality/${action}`, { method: 'POST' });
+                const result = await response.json();
+
+                resultDiv.innerHTML = `
+                    <div class="alert alert-success">
+                        <strong>✅ ${description} 완료!</strong><br>
+                        ${result.message || '성공적으로 처리되었습니다.'}
+                    </div>
+                `;
+
+                // 데이터 새로고침
+                setTimeout(loadQualityData, 1000);
+
+            } catch (error) {
+                resultDiv.innerHTML = `<div class="alert alert-danger">❌ ${description} 실패: ${error.message}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import json
 import asyncio
+import logging
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 
@@ -24,6 +25,10 @@ sys.path.append('/app/shared')
 
 from shared.models.database import Channel, Content, get_database_url
 from rag_agent import YouTubeRAGAgent
+
+# Logger 설정
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 # Pydantic 모델들
@@ -618,38 +623,84 @@ async def toggle_content_status(
         # 토글
         content.is_active = not content.is_active
 
-        # 비활성화 시 벡터 DB에서 제거
+        # 비활성화 시 관련 데이터 정리
         if not content.is_active:
             from qdrant_client import QdrantClient
+            from shared.models.database import ProcessingJob
+
+            # 1. 대기열의 작업 제거 (pending, processing 상태)
+            pending_jobs = db.query(ProcessingJob).filter(
+                ProcessingJob.content_id == content_id,
+                ProcessingJob.status.in_(['pending', 'processing'])
+            ).all()
+
+            for job in pending_jobs:
+                # 작업 취소 상태로 변경
+                job.status = 'cancelled'
+                job.error_message = 'Content deactivated by admin'
+
+            logger.info(f"콘텐츠 {content_id} 비활성화: {len(pending_jobs)}개 작업 취소")
+
+            # 2. 벡터 DB에서 제거
             qdrant_client = QdrantClient(url=os.getenv('QDRANT_URL', 'http://qdrant:6333'))
 
             # 해당 콘텐츠의 벡터 삭제
-            for collection in ['youtube_content', 'youtube_summaries', 'youtube_paragraphs']:
+            for collection in ['youtube_content', 'youtube_summaries']:
                 try:
-                    qdrant_client.delete(
+                    result = qdrant_client.delete(
                         collection_name=collection,
                         points_selector={
                             "filter": {
                                 "must": [
-                                    {"key": "content_id", "match": {"value": content_id}}
+                                    {"key": "content_id", "match": {"value": str(content_id)}}
                                 ]
                             }
                         }
                     )
-                except:
-                    pass  # 컬렉션이 없으면 무시
+                    if result:
+                        logger.info(f"콘텐츠 {content_id}의 벡터 삭제됨: {collection}")
+                except Exception as e:
+                    logger.warning(f"벡터 삭제 실패 {collection}: {e}")
+
+            # 3. 플래그 업데이트
+            content.vector_stored = False
 
         # 재활성화 시 재처리 큐에 추가
-        elif content.is_active and content.vector_stored:
-            # 이미 처리된 데이터가 있으면 벡터만 재생성
+        elif content.is_active:
             from shared.models.database import ProcessingJob
-            job = ProcessingJob(
-                content_id=content_id,
-                job_type='vectorize',
-                status='pending',
-                priority=5
-            )
-            db.add(job)
+
+            # 기존 취소된 작업 확인
+            cancelled_jobs = db.query(ProcessingJob).filter(
+                ProcessingJob.content_id == content_id,
+                ProcessingJob.status == 'cancelled'
+            ).all()
+
+            # 취소된 작업을 다시 활성화
+            for job in cancelled_jobs:
+                job.status = 'pending'
+                job.error_message = None
+
+            # 아무 작업도 없으면 새로 추가
+            if not cancelled_jobs:
+                # 트랜스크립트가 있으면 벡터화만, 없으면 STT부터
+                if content.transcript_available:
+                    job = ProcessingJob(
+                        content_id=content_id,
+                        job_type='vectorize',
+                        status='pending',
+                        priority=5
+                    )
+                    db.add(job)
+                else:
+                    job = ProcessingJob(
+                        content_id=content_id,
+                        job_type='stt',
+                        status='pending',
+                        priority=5
+                    )
+                    db.add(job)
+
+            logger.info(f"콘텐츠 {content_id} 재활성화: 작업 큐에 추가")
 
         db.commit()
 
@@ -670,33 +721,88 @@ async def bulk_toggle_contents(
         content_ids = request.get("content_ids", [])
         is_active = request.get("is_active", True)
 
+        from shared.models.database import ProcessingJob
+        from qdrant_client import QdrantClient
+
         # 업데이트
         db.query(Content).filter(Content.id.in_(content_ids)).update(
             {"is_active": is_active},
             synchronize_session=False
         )
 
-        # 벡터 DB 동기화
+        # 비활성화 시 관련 데이터 정리
         if not is_active:
-            # 비활성화 시 벡터 삭제
-            from qdrant_client import QdrantClient
+            # 1. 대기열 작업 취소
+            pending_jobs = db.query(ProcessingJob).filter(
+                ProcessingJob.content_id.in_(content_ids),
+                ProcessingJob.status.in_(['pending', 'processing'])
+            ).all()
+
+            for job in pending_jobs:
+                job.status = 'cancelled'
+                job.error_message = 'Content bulk deactivated by admin'
+
+            logger.info(f"일괄 비활성화: {len(content_ids)}개 콘텐츠, {len(pending_jobs)}개 작업 취소")
+
+            # 2. 벡터 DB에서 삭제
             qdrant_client = QdrantClient(url=os.getenv('QDRANT_URL', 'http://qdrant:6333'))
 
             for content_id in content_ids:
-                for collection in ['youtube_content', 'youtube_summaries', 'youtube_paragraphs']:
+                for collection in ['youtube_content', 'youtube_summaries']:
                     try:
-                        qdrant_client.delete(
+                        result = qdrant_client.delete(
                             collection_name=collection,
                             points_selector={
                                 "filter": {
                                     "must": [
-                                        {"key": "content_id", "match": {"value": content_id}}
+                                        {"key": "content_id", "match": {"value": str(content_id)}}
                                     ]
                                 }
                             }
                         )
-                    except:
-                        pass
+                        if result:
+                            logger.info(f"콘텐츠 {content_id} 벡터 삭제: {collection}")
+                    except Exception as e:
+                        logger.warning(f"벡터 삭제 실패 {collection}: {e}")
+
+            # 3. vector_stored 플래그 업데이트
+            db.query(Content).filter(Content.id.in_(content_ids)).update(
+                {"vector_stored": False},
+                synchronize_session=False
+            )
+
+        else:
+            # 재활성화 시 작업 큐 추가
+            for content_id in content_ids:
+                # 취소된 작업 재활성화
+                cancelled_jobs = db.query(ProcessingJob).filter(
+                    ProcessingJob.content_id == content_id,
+                    ProcessingJob.status == 'cancelled'
+                ).all()
+
+                if cancelled_jobs:
+                    for job in cancelled_jobs:
+                        job.status = 'pending'
+                        job.error_message = None
+                else:
+                    # 새 작업 추가
+                    content = db.query(Content).filter(Content.id == content_id).first()
+                    if content:
+                        if content.transcript_available:
+                            job = ProcessingJob(
+                                content_id=content_id,
+                                job_type='vectorize',
+                                status='pending',
+                                priority=5
+                            )
+                        else:
+                            job = ProcessingJob(
+                                content_id=content_id,
+                                job_type='stt',
+                                status='pending',
+                                priority=5
+                            )
+                        db.add(job)
 
         db.commit()
 

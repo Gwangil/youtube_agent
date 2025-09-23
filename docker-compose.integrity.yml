@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # 데이터 정합성 관리 서비스
+  data-integrity:
+    image: youtube_agent-data-integrity
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: youtube_data_integrity
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./services/data-integrity:/app/services/data-integrity
+      - ./shared:/app/shared
+    networks:
+      - youtube_agent_network
+    depends_on:
+      - postgres
+      - qdrant
+      - redis
+    command: >
+      sh -c "
+        pip install qdrant-client psycopg2-binary redis sqlalchemy &&
+        python /app/services/data-integrity/data_integrity_manager.py --monitor
+      "
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8085/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 자동 복구 서비스
+  auto-recovery:
+    image: youtube_agent-auto-recovery
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: youtube_auto_recovery
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./services/data-integrity:/app/services/data-integrity
+      - ./shared:/app/shared
+    networks:
+      - youtube_agent_network
+    depends_on:
+      - postgres
+      - redis
+      - data-integrity
+    command: python /app/services/data-integrity/auto_recovery.py
+    restart: unless-stopped
+
+  # 데이터 품질 대시보드
+  quality-dashboard:
+    image: youtube_agent-quality-dashboard
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: youtube_quality_dashboard
+    ports:
+      - "8085:8085"
+    environment:
+      - DATABASE_URL=postgresql://youtube_user:youtube_pass@postgres:5432/youtube_agent
+      - QDRANT_URL=http://qdrant:6333
+      - REDIS_URL=redis://redis:6379
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./services/data-integrity:/app/services/data-integrity
+      - ./shared:/app/shared
+    networks:
+      - youtube_agent_network
+    depends_on:
+      - postgres
+      - qdrant
+      - redis
+      - data-integrity
+    command: >
+      sh -c "
+        pip install fastapi uvicorn qdrant-client psycopg2-binary redis sqlalchemy &&
+        python /app/services/data-integrity/quality_dashboard.py
+      "
+    restart: unless-stopped
+
+networks:
+  youtube_agent_network:
+    external: true

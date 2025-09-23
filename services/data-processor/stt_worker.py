@@ -207,6 +207,14 @@ class ImprovedSTTWorkerWithCost:
             if not content:
                 raise Exception(f"콘텐츠를 찾을 수 없음: {job.content_id}")
 
+            # 비활성 콘텐츠는 처리하지 않음
+            if hasattr(content, 'is_active') and not content.is_active:
+                print(f"  ⏭️ [Worker {self.worker_id}] 콘텐츠가 비활성화됨, 작업 취소")
+                job.status = 'cancelled'
+                job.error_message = 'Content is inactive'
+                db.commit()
+                return
+
             print(f"  📺 [Worker {self.worker_id}] 처리 시작: {content.title[:50]}...")
 
             # 오디오 다운로드
