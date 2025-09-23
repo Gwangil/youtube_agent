@@ -188,35 +188,63 @@ STT_AUTO_APPROVE_THRESHOLD=0.50
 
 ## STT 처리 문제
 
-### 🔴 문제: STT 처리가 매우 느림
+### 🔴 문제: STT 워커가 OpenAI API 승인 대기에서 멈춤
+
+**증상:**
+```
+⏳ 승인 대기 중... (남은 시간: 30분)
+```
+
+**원인:**
+- Whisper GPU 서버 타임아웃 후 OpenAI API 폴백
+- 고아 승인 요청이 Redis에 누적
+
+**해결방법:**
+```bash
+# 1. 고아 승인 요청 확인
+docker exec youtube_redis redis-cli HGETALL "stt:pending_approval"
+
+# 2. 고아 승인 요청 삭제
+docker exec youtube_redis redis-cli DEL "stt:pending_approval"
+
+# 3. STT 워커 재시작
+for i in 1 2 3; do docker restart youtube_stt_worker_${i}_gpu; done
+```
+
+### 🔴 문제: Whisper 서버 타임아웃 (10분 이상 오디오)
+
+**증상:**
+```
+HTTPConnectionPool(host='whisper-server', port=8082): Read timed out
+```
+
+**원인:** 긴 오디오 파일 처리 시 메모리 부족
+
+**해결방법:**
+- 이미 자동으로 5분 단위 청킹 처리됨
+- 문제 지속 시 Whisper 서버 재시작:
+```bash
+docker restart youtube_whisper_server
+```
+
+### 🔴 문제: GPU 사용률이 낮음 (CPU 처리로 넘어감)
 
 **원인 진단:**
 ```bash
 # GPU 사용률 확인
-nvidia-smi
+nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv
 
-# 워커 상태 확인
-docker logs youtube_stt_worker_1 --tail 30
+# Whisper 서버 상태 확인
+docker logs youtube_whisper_server --tail 20
 ```
 
 **해결방법:**
-1. GPU 모드 사용 확인
-2. 워커 수 증가
-3. OpenAI API 폴백 활성화
-
-### 🔴 문제: 반복 텍스트/할루시네이션
-
-**증상:**
+1. Whisper 서버 재시작
+2. VRAM 메모리 정리
+3. GPU 모드 강제 실행:
+```bash
+./start_gpu.sh
 ```
-같은 문장이 계속 반복됨
-"한국어 팟캐스트" 같은 무관한 텍스트
-```
-
-**해결방법:**
-이미 자동 처리됨. 문제 지속 시:
-1. Whisper 모델 업데이트
-2. 온도 설정 조정
-3. 데이터 정제 스크립트 실행
 
 ## 데이터베이스 문제
 
@@ -288,6 +316,62 @@ sudo lsof -i :8000
 sudo kill -9 [PID]
 
 # 또는 포트 변경 (.env)
+```
+
+## 데이터 품질 문제
+
+### 🔴 문제: 데이터 정합성 불일치
+
+**증상:**
+- PostgreSQL과 Qdrant 데이터 불일치
+- 처리 플래그가 실제 상태와 다름
+- 고아 데이터 존재
+
+**해결방법:**
+```bash
+# 자동 정합성 체크 실행
+./scripts/manage_quality_services.sh check
+
+# 데이터 품질 대시보드 확인
+http://localhost:8090/data-quality
+
+# 수동 정합성 수정
+./scripts/fix_data_integrity.sh
+```
+
+### 🔴 문제: 비활성 콘텐츠가 계속 처리됨
+
+**원인:** 콘텐츠 비활성화 시 대기열이 정리되지 않음
+
+**해결방법:**
+```bash
+# 비활성 콘텐츠의 대기 작업 취소
+docker exec youtube_postgres psql -U youtube_user -d youtube_agent -c "
+UPDATE processing_jobs j
+SET status = 'cancelled', error_message = 'Content is inactive'
+FROM content c
+WHERE j.content_id = c.id
+AND c.is_active = FALSE
+AND j.status IN ('pending', 'processing');"
+```
+
+### 🔴 문제: 중복 벡터/작업 누적
+
+**진단:**
+```bash
+# 중복 작업 확인
+docker exec youtube_postgres psql -U youtube_user -d youtube_agent -c "
+SELECT content_id, job_type, COUNT(*)
+FROM processing_jobs
+WHERE status = 'pending'
+GROUP BY content_id, job_type
+HAVING COUNT(*) > 1;"
+```
+
+**해결방법:**
+```bash
+# 자동 정리 서비스 실행
+./scripts/manage_quality_services.sh start
 ```
 
 ## 성능 문제

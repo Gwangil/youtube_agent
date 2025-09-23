@@ -352,18 +352,20 @@ pip freeze > requirements.txt
   - 웹 대시보드 통합 (포트 8090)
 
 ### 🔄 현재 운영 상태
-- **수집된 콘텐츠**: 2개 YouTube 채널, 105개 콘텐츠
+- **수집된 콘텐츠**: 2개 YouTube 채널, 105개 콘텐츠 (활성: 97개)
 - **처리 상태**:
-  - STT 완료: 10개
-  - 벡터화 완료: 44개
-  - 대기 중: 51개
+  - STT 완료: 16개
+  - 벡터화 완료: 22개
+  - 대기 중: 97개
+  - 취소됨: 9개 (비활성 콘텐츠)
 - **벡터 DB 상태**:
-  - youtube_content: 7,448 포인트 (활발히 사용)
-  - youtube_summaries: 10 포인트 (활발히 사용)
-  - ~~youtube_paragraphs~~: 삭제됨 (레거시)
-  - ~~youtube_full_texts~~: 삭제됨 (레거시)
+  - youtube_content: 4,511 포인트 (활발히 사용)
+  - youtube_summaries: 16 포인트 (활발히 사용)
 - **서비스 상태**: 18개 컨테이너 모두 정상 작동 중
-- **데이터 품질**: 중복 데이터 정리 완료, Soft Delete 시스템 적용
+- **데이터 품질**:
+  - 자동 정합성 체크 서비스 실행 중
+  - 콘텐츠 비활성화 시 대기열/벡터 자동 정리
+  - Soft Delete 시스템 정상 작동
 
 ### 💡 향후 개선 방향 (단기)
 - [ ] 모니터링 시스템 고도화 (Prometheus + Grafana)
@@ -623,7 +625,14 @@ if not content.is_active:
 
 ---
 **마지막 업데이트**: 2025-09-23
-**최근 주요 개선사항**:
+**최근 주요 개선사항** (2025-09-23):
+- **콘텐츠 비활성화 동기화**: 비활성화 시 대기열 작업 취소 및 벡터 DB 자동 정리
+- **자동 데이터 품질 관리**: 30분마다 정합성 체크, 작업 복구, 알림 시스템
+- **Whisper GPU 메모리 최적화**: 10분 이상 오디오 5분 단위 청킹 처리
+- **OpenAI API 승인 문제 해결**: 고아 승인 요청 자동 정리 메커니즘
+- **워커 보호 메커니즘**: 비활성 콘텐츠 처리 시 자동 취소
+
+**이전 개선사항**:
 - **GPU/CPU 모드 분리**: 인프라별 docker-compose 파일 분리 (base/gpu/cpu)
 - **자동 환경 감지**: detect_environment.sh로 GPU 유무 자동 판별
 - **통합 실행 스크립트**: start.sh, start_gpu.sh, start_cpu.sh 제공
@@ -632,8 +641,6 @@ if not content.is_active:
 - **OpenAI 전용 모드**: FORCE_OPENAI_API 환경변수로 강제 API 사용
 - **임베딩 래퍼**: embedding_server_wrapper.py로 OpenAI/BGE-M3 선택
 - **비용 관리 강화**: STT API 사용 시 자동 비용 제한 및 승인
-- **문서 업데이트**: README.md, ARCHITECTURE.md, TROUBLESHOOTING.md 최신화
-- **컨테이너 정리**: cleanup_old_containers.sh 스크립트 추가
 - to memorize
 - to memorize and update docs
 - to memorize
